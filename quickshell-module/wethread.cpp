@@ -200,14 +200,12 @@ void WeThread::run() {
 		auto start = clock::now();
 
 		auto& tgt = targets[back];
-		// dispatchEventQueue() is WE's real per-frame render: it binds the output
-		// FBO, clears, runs app.update() for each viewport, calls updateRender(),
-		// AND increments the driver frame counter. That last part is essential - WE
-		// skips re-rendering the scene unless the frame counter advances.
-		// Scenes render into the driver's OWN output FBO (driver->fbo()), not into
-		// setDestinationFramebuffer, so blit that output into our double-buffered
-		// target - Qt then samples a stable, complete frame.
-		driver->dispatchEventQueue();
+		// app->render() advances g_Time (driver clock - else the scene freezes at
+		// t=0), updates audio/media, and calls dispatchEventQueue() which renders
+		// each viewport into the driver's output FBO and bumps the frame counter.
+		// Scenes land in that output FBO (driver->fbo()), not in
+		// setDestinationFramebuffer, so blit it into our double-buffered target.
+		app->render();
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, driver->fbo());
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
 		glBlitFramebuffer(
@@ -234,16 +232,24 @@ void WeThread::run() {
 			unsigned char c[4] = {0}, q[4] = {0};
 			glReadPixels(this->mWidth / 2, this->mHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
 			glReadPixels(this->mWidth / 4, this->mHeight / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, q);
-			GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+			// Also sample the wallpaper's OWN scene framebuffer (where WE renders
+			// the real frame) to compare against the driver output.
+			GLuint sceneFb = app->getFirstWallpaperFramebuffer();
+			unsigned char s0[4] = {0}, s1[4] = {0};
+			if (sceneFb) {
+				glBindFramebuffer(GL_FRAMEBUFFER, sceneFb);
+				glReadPixels(this->mWidth / 2, this->mHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, s0);
+				glReadPixels(this->mWidth / 3, this->mHeight / 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, s1);
+			}
 			GLenum err = glGetError();
 			glBindFramebuffer(GL_FRAMEBUFFER, 0);
 			if (FILE* f = std::fopen("/tmp/we_diag.log", "a")) {
 				std::fprintf(
 				    f,
-				    "WeThread frame %d: tex=%u fbo=%u %dx%d center=%d,%d,%d,%d quarter=%d,%d,%d,%d "
-				    "fbstatus=0x%x glerr=0x%x\n",
-				    frameNo, tgt.texture, tgt.fbo, this->mWidth, this->mHeight, c[0], c[1], c[2], c[3],
-				    q[0], q[1], q[2], q[3], fbs, err
+				    "WeThread frame %d: tgt(%u) c=%d,%d,%d,%d q=%d,%d,%d,%d | sceneFB=%u "
+				    "s0=%d,%d,%d,%d s1=%d,%d,%d,%d glerr=0x%x\n",
+				    frameNo, tgt.fbo, c[0], c[1], c[2], c[3], q[0], q[1], q[2], q[3], sceneFb, s0[0],
+				    s0[1], s0[2], s0[3], s1[0], s1[1], s1[2], s1[3], err
 				);
 				std::fclose(f);
 			}
