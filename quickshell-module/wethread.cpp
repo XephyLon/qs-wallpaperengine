@@ -7,6 +7,7 @@
 #include <EGL/eglext.h>
 
 #include <chrono>
+#include <clocale>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -121,6 +122,13 @@ unsigned int WeThread::acquireTexture() {
 void WeThread::run() {
 	auto dpy = static_cast<EGLDisplay>(this->mDisplay);
 	auto ctx = static_cast<EGLContext>(this->mContext);
+
+	// mpv (WE's video-wallpaper backend) hard-requires LC_NUMERIC=C, and refuses
+	// to create its context otherwise ("Non-C locale detected"). WE's own main()
+	// sets this; we bypass main, so set it here. LC_NUMERIC only affects C-library
+	// number formatting - Qt's UI uses QLocale independently, so the shell is
+	// unaffected.
+	std::setlocale(LC_NUMERIC, "C");
 
 	// ctx is a Qt-built share context (matches Qt's config/robustness flags).
 	// Make it current surfacelessly - we only render to FBOs, no window surface.
