@@ -19,7 +19,24 @@ frames: the FBO's color attachment is a GL texture Quickshell imports as a
 - `WallpaperEngine::Render::CFBO` — WE already wraps FBOs; reuse it for the
   target so scenes composite the same way they do for the on-screen drivers.
 
-## Context sharing (the crux)
+## UPDATE: WE has first-class destination-FBO support
+
+`WallpaperApplication::setDestinationFramebuffer(GLuint)` sets the FBO every
+wallpaper composites its final frame into (`CWallpaper.cpp` binds
+`m_destFramebuffer` before the composite). `WallpaperApplication::update(viewport)`
+(== `RenderContext::render(viewport)`) and `getOutput()` are public.
+
+This collapses the hard part: **run WE on Qt's own GL context** and point the
+destination FBO at a Qt-side texture — no separate/shared EGL context needed.
+`CFboOpenGLDriver` then just *adopts* the current (Qt) context: `makeCurrent`
+is a no-op, `getProcAddress` = `eglGetProcAddress`, no context creation. The
+surface drives `app->update(viewport)` per Qt frame inside
+`window->beginExternalCommands()/endExternalCommands()` (so Qt restores its GL
+state) and samples the destination texture. The share-context params on the
+driver are kept only as a fallback if running on Qt's context proves to pollute
+scene-graph state.
+
+## Context sharing (fallback path — the crux if adopt-context fails)
 
 Quickshell runs the OpenGL RHI on EGL. CFboOutput must **not** create its own
 isolated context — it must render on a context that shares objects with
