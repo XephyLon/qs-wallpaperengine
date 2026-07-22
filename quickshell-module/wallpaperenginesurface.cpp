@@ -94,7 +94,8 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		this->mShareContext = std::move(share);
 		this->mLoadedPath = this->mProjectPath;
 		this->mThread = std::make_unique<WeThread>(
-		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h
+		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
+		    this->mFps
 		);
 	}
 
@@ -145,6 +146,7 @@ void WallpaperEngineSurface::setFps(int fps) {
 	this->mFps = fps;
 	emit this->fpsChanged();
 	this->updateRepaintTimer();
+	if (this->mThread) this->mThread->setFps(fps);
 }
 
 } // namespace qs::wallpaperengine

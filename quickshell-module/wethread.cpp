@@ -91,14 +91,16 @@ WeThread::WeThread(
     std::string projectPath,
     std::string assetsDir,
     int width,
-    int height
+    int height,
+    int fps
 )
     : mDisplay(display)
     , mContext(sharedContext)
     , mProjectPath(std::move(projectPath))
     , mAssetsDir(std::move(assetsDir))
     , mWidth(width)
-    , mHeight(height) {
+    , mHeight(height)
+    , mFps(fps > 0 ? fps : 60) {
 	this->mThread = std::thread([this] { this->run(); });
 }
 
@@ -219,10 +221,10 @@ void WeThread::run() {
 	}
 
 	using clock = std::chrono::steady_clock;
-	const auto frameTime = std::chrono::milliseconds(1000 / 60);
 
 	while (!this->mStop) {
 		auto start = clock::now();
+		const auto frameTime = std::chrono::milliseconds(1000 / this->mFps.load());
 
 		auto& tgt = targets[back];
 		// app->render() advances g_Time (driver clock - else the scene freezes at

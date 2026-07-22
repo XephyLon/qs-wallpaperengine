@@ -27,7 +27,8 @@ public:
 	    std::string projectPath,
 	    std::string assetsDir,
 	    int width,
-	    int height
+	    int height,
+	    int fps
 	);
 	~WeThread();
 
@@ -35,6 +36,9 @@ public:
 	// completed frame (valid in the shared context), or 0 if none ready. Inserts
 	// a wait on the producer's fence so sampling is safe.
 	unsigned int acquireTexture();
+
+	// Live-adjust the producer frame rate (thread-safe).
+	void setFps(int fps) { this->mFps.store(fps > 0 ? fps : 60); }
 
 	[[nodiscard]] int width() const { return this->mWidth; }
 	[[nodiscard]] int height() const { return this->mHeight; }
@@ -51,6 +55,7 @@ private:
 
 	std::thread mThread;
 	std::atomic<bool> mStop {false};
+	std::atomic<int> mFps {60};
 
 	// Double buffer: producer draws mBack, publishes to mFront under mMutex.
 	std::mutex mMutex;

@@ -87,6 +87,11 @@ if "getFirstWallpaperFramebuffer" not in h:
 open(h_p, "w").write(h)
 PY
 
+# Prefer known-good hardware decoders (nvdec on NVIDIA) over mpv's full "auto",
+# which tries vdpau first and noisily falls back. Video wallpapers only.
+sed -i 's/mpv_set_property_string (this->m_handle, "hwdec", "auto");/mpv_set_property_string (this->m_handle, "hwdec", "auto-safe");/' \
+	"$WE_SRC/src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp"
+
 # Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
 WE_CMAKE="$WE_SRC/CMakeLists.txt"
 if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then
