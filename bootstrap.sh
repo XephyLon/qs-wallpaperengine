@@ -113,8 +113,20 @@ cat <<'EOF'
 EOF
 
 echo "==> [3/4] build quickshell"
+# The illogical-impulse (end4-pC) shell needs these service plugins compiled in,
+# or shell.qml fails to load (e.g. `module "Quickshell.Services.Pipewire" ...
+# not found`). They are OFF by default in a plain quickshell build. Configure
+# with ALL of them ON in ONE fresh configure - toggling them on an existing
+# build dir leaves Qt's dbus codegen half-wired ("No rule to make target
+# src/dbus/dbus_objectmanager.cpp"; if that happens, generate it by hand with
+# qdbusxml2cpp -p dbus_objectmanager -c DBusObjectManagerInterface
+# -i src/dbus/dbus_objectmanager_types.hpp src/dbus/org.freedesktop.DBus.ObjectManager.xml
+# into <build>/src/dbus/, same for dbus_properties, then rebuild).
 # cmake -S "$QS_SRC" -B "$QS_SRC/build" -DCMAKE_BUILD_TYPE=Release \
-#   -DWALLPAPERENGINE_INCLUDE_DIR="$WALLPAPERENGINE_INCLUDE_DIR"
+#   -DWALLPAPERENGINE_INCLUDE_DIR="$WALLPAPERENGINE_INCLUDE_DIR" \
+#   -DSERVICE_MPRIS=ON -DSERVICE_NOTIFICATIONS=ON -DSERVICE_PAM=ON \
+#   -DSERVICE_PIPEWIRE=ON -DSERVICE_POLKIT=ON -DSERVICE_STATUS_NOTIFIER=ON \
+#   -DSERVICE_UPOWER=ON
 # cmake --build "$QS_SRC/build" -j
 
 echo "==> [4/4] package"
