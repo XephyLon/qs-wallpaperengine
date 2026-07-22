@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include <qcoreapplication.h>
 #include <qopenglcontext.h>
 #include <qopenglcontext_platform.h>
 #include <qquickwindow.h>
@@ -33,6 +34,16 @@ WallpaperEngineSurface::WallpaperEngineSurface(QQuickItem* parent): QQuickItem(p
 	// updatePaintNode on the render thread) keeps the scene-graph sync race-free.
 	QObject::connect(&this->mRepaint, &QTimer::timeout, this, [this] { this->update(); });
 	this->updateRepaintTimer();
+
+	// Stop + join the WE thread while the event loop and render thread are still
+	// alive. If we wait for the item destructor (Qt teardown), the scene-graph
+	// render thread deadlocks against the still-running WE thread and the process
+	// hangs on quit (SIGTERM appears ignored). aboutToQuit fires first, on the
+	// GUI thread, so the join happens at a safe point.
+	QObject::connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+		this->mThread.reset();
+		this->mShareContext.reset();
+	});
 }
 
 void WallpaperEngineSurface::updateRepaintTimer() {

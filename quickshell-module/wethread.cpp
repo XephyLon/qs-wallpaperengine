@@ -6,6 +6,9 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 
+#include <csignal>
+#include <pthread.h>
+
 #include <chrono>
 #include <clocale>
 #include <cstdio>
@@ -120,6 +123,23 @@ unsigned int WeThread::acquireTexture() {
 }
 
 void WeThread::run() {
+	// Block async-termination signals in this worker thread so the kernel
+	// delivers them to Quickshell's main/handler thread instead. Otherwise this
+	// thread (spawned with signals unblocked) can absorb SIGTERM/SIGINT and the
+	// shell never quits (appears to ignore the signal).
+	sigset_t sigs;
+	sigemptyset(&sigs);
+	sigaddset(&sigs, SIGTERM);
+	sigaddset(&sigs, SIGINT);
+	sigaddset(&sigs, SIGHUP);
+	sigaddset(&sigs, SIGQUIT);
+	pthread_sigmask(SIG_BLOCK, &sigs, nullptr);
+
+	// WE initializes SDL, which by default installs its own SIGINT/SIGTERM
+	// handlers - they swallow those signals so the shell stops quitting on them.
+	// Disable that before WE (SDL_Init) runs so the process terminates normally.
+	setenv("SDL_NO_SIGNAL_HANDLERS", "1", 1);
+
 	auto dpy = static_cast<EGLDisplay>(this->mDisplay);
 	auto ctx = static_cast<EGLContext>(this->mContext);
 
@@ -135,6 +155,7 @@ void WeThread::run() {
 	eglBindAPI(EGL_OPENGL_API);
 	if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
 		std::fprintf(stderr, "WeThread: eglMakeCurrent failed: 0x%x\n", eglGetError());
+		std::fflush(stderr);
 		return;
 	}
 
@@ -143,11 +164,13 @@ void WeThread::run() {
 	// non-fatal - core GL entry points still load. Only a hard failure aborts.
 	if (GLenum err = glewInit(); err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
 		std::fprintf(stderr, "WeThread: glewInit failed: %s\n", glewGetErrorString(err));
+		std::fflush(stderr);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
 	if (glGenFramebuffers == nullptr) {
 		std::fprintf(stderr, "WeThread: core GL not loaded after glewInit\n");
+		std::fflush(stderr);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
@@ -181,6 +204,7 @@ void WeThread::run() {
 		app->setup();
 	} catch (const std::exception& e) {
 		std::fprintf(stderr, "WeThread: WE start failed: %s\n", e.what());
+		std::fflush(stderr);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
@@ -188,6 +212,7 @@ void WeThread::run() {
 	pendingDriverSlot() = nullptr;
 	if (driver == nullptr) {
 		std::fprintf(stderr, "WeThread: driver never registered\n");
+		std::fflush(stderr);
 		app->cleanup();
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
@@ -247,6 +272,7 @@ void WeThread::run() {
 	glDeleteTextures(1, &targets[1].texture);
 	glDeleteRenderbuffers(1, &targets[0].depthStencil);
 	glDeleteRenderbuffers(1, &targets[1].depthStencil);
+	app.reset();
 	// ctx is owned by the surface's QOpenGLContext; just release it from this
 	// thread, don't destroy it.
 	eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
