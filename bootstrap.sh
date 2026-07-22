@@ -41,6 +41,11 @@ cp "$HERE/we-fbo-driver/CFboOutputViewport.h" "$WE_DRV/Output/"
 cp "$HERE/we-fbo-driver/CFboOutputViewport.cpp" "$WE_DRV/Output/"
 cp "$HERE/we-fbo-driver/NullMouseInput.h" "$WE_SRC/src/WallpaperEngine/Input/"
 
+# Let a later driver registration OVERRIDE an earlier one (default uses emplace,
+# which ignores duplicates, so GLFW's window driver would always win over ours).
+sed -i 's/cur->second.emplace (xdgSessionType, factory);/cur->second.insert_or_assign (xdgSessionType, factory);/; s/map.emplace (xdgSessionType, factory);/map.insert_or_assign (xdgSessionType, factory);/' \
+	"$WE_SRC/src/WallpaperEngine/Render/Drivers/VideoFactories.cpp"
+
 # Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
 WE_CMAKE="$WE_SRC/CMakeLists.txt"
 if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then

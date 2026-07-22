@@ -39,6 +39,7 @@ void ensureDriverRegistered() {
 		    auto driver =
 		        std::make_unique<we::Render::Drivers::CFboOpenGLDriver>(ctx, app, nullptr, nullptr, size);
 		    pendingDriverSlot() = driver.get();
+		    qWarning("WE: CFbo factory called, driver=%p size=%dx%d", (void*) driver.get(), size.x, size.y);
 		    return driver;
 	    }
 	);
@@ -75,6 +76,7 @@ public:
 			this->driver = pendingDriverSlot();
 			pendingDriverSlot() = nullptr;
 			this->ready = this->driver != nullptr;
+			qWarning("WE: after setup, driver=%p ready=%d", (void*) this->driver, this->ready);
 		} catch (const std::exception& e) {
 			qWarning("WallpaperEngineSurface: failed to start Wallpaper Engine: %s", e.what());
 			this->ready = false;
@@ -116,24 +118,28 @@ public:
 		return new QOpenGLFramebufferObject(size, fmt);
 	}
 
-	// synchronize() runs on the render thread with the GUI thread blocked and the
-	// GL context current - Qt's designated place for GL resource setup. Build the
-	// heavy WE app here (not in render()).
+	// synchronize() only captures item state - NO GL here. synchronize() is not
+	// bracketed by Qt's external-command isolation, so heavy unbracketed WE GL
+	// setup here pollutes Qt's GL state and breaks Qt's own shader compiles.
 	void synchronize(QQuickFramebufferObject* item) override {
 		auto* surface = static_cast<WallpaperEngineSurface*>(item);
 		this->wantedPath = surface->projectPath();
 		this->live = surface->live();
-		const int w = static_cast<int>(surface->width());
-		const int h = static_cast<int>(surface->height());
+		this->itemW = static_cast<int>(surface->width());
+		this->itemH = static_cast<int>(surface->height());
 		if (this->wantedPath != this->loadedPath) this->context.reset();
-		if (!this->context && !this->wantedPath.isEmpty() && w > 0 && h > 0) {
-			this->loadedPath = this->wantedPath;
-			this->context = std::make_unique<WallpaperEngineContext>(this->wantedPath, w, h);
-			if (!this->context->valid()) this->context.reset();
-		}
 	}
 
+	// render() IS bracketed by Qt (beginExternalCommands/endExternalCommands
+	// around it), so all WE GL - setup included - happens here, isolated.
 	void render() override {
+		if (!this->context && !this->wantedPath.isEmpty() && this->itemW > 0 && this->itemH > 0) {
+			this->loadedPath = this->wantedPath;
+			this->context = std::make_unique<WallpaperEngineContext>(
+			    this->wantedPath, this->itemW, this->itemH
+			);
+			if (!this->context->valid()) this->context.reset();
+		}
 		auto* fbo = this->framebufferObject();
 		if (this->context && fbo) this->context->renderInto(fbo->handle());
 		if (this->live) this->update(); // schedule next frame
@@ -143,6 +149,8 @@ private:
 	std::unique_ptr<WallpaperEngineContext> context;
 	QString wantedPath;
 	QString loadedPath;
+	int itemW = 0;
+	int itemH = 0;
 	bool live = true;
 };
 } // namespace

@@ -17,30 +17,30 @@ if (NOT DEFINED WALLPAPERENGINE_SRC)
 	set(WALLPAPERENGINE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../linux-wallpaperengine/src"
 		CACHE PATH "linux-wallpaperengine source root (headers + CFbo sources)")
 endif()
+if (NOT DEFINED WALLPAPERENGINE_BUILD)
+	set(WALLPAPERENGINE_BUILD "${WALLPAPERENGINE_SRC}/../build"
+		CACHE PATH "linux-wallpaperengine build dir (lib + compile_commands.json)")
+endif()
+# Prefer the freshly built lib (it contains the CFbo driver + the registerDriver
+# override patch); fall back to the installed one.
 find_library(WALLPAPERENGINE_LIB
 	NAMES linux-wallpaperengine-lib
-	PATHS /opt/linux-wallpaperengine /usr/lib
+	PATHS "${WALLPAPERENGINE_BUILD}/output" "${WALLPAPERENGINE_BUILD}" /opt/linux-wallpaperengine /usr/lib
+	NO_DEFAULT_PATH
 )
-
-set(WE_DRV "${WALLPAPERENGINE_SRC}/WallpaperEngine/Render/Drivers")
+if (NOT WALLPAPERENGINE_LIB)
+	find_library(WALLPAPERENGINE_LIB NAMES linux-wallpaperengine-lib
+		PATHS "${WALLPAPERENGINE_BUILD}/output" "${WALLPAPERENGINE_BUILD}" /opt/linux-wallpaperengine /usr/lib)
+endif()
 
 qt_add_library(quickshell-wallpaperengine STATIC
 	wallpaperenginesurface.cpp
-	# FBO driver, compiled here (not via a WE rebuild):
-	"${WE_DRV}/CFboOpenGLDriver.cpp"
-	"${WE_DRV}/Output/CFboWindowOutput.cpp"
-	"${WE_DRV}/Output/CFboOutputViewport.cpp"
 )
 
 # WE headers pull in a large vendored-dep include set (glslang, SPIRV-Cross,
 # json, kissfft, stb, quickjs, cef, generated protocols...). Rather than hardcode
 # WE's build layout, harvest the exact -I/-isystem dirs from WE's
 # compile_commands.json (the WE tree must be cmake-configured; bootstrap does it).
-if (NOT DEFINED WALLPAPERENGINE_BUILD)
-	set(WALLPAPERENGINE_BUILD "${WALLPAPERENGINE_SRC}/../build"
-		CACHE PATH "linux-wallpaperengine build dir (has compile_commands.json)")
-endif()
-
 set(_we_incs "")
 if (EXISTS "${WALLPAPERENGINE_BUILD}/compile_commands.json")
 	execute_process(
