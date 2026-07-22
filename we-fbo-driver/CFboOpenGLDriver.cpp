@@ -1,12 +1,18 @@
 #include "CFboOpenGLDriver.h"
 
-// TODO(embed): #include <EGL/egl.h> <GLES3/gl3.h>
+#include <EGL/egl.h>
+#include <GL/glew.h>
+#include <chrono>
 
 namespace WallpaperEngine::Render::Drivers {
 
 // VideoDriver's ctor stores the MouseInput& (via InputContext) without calling
 // it, so passing our not-yet-constructed member is safe - the same pattern
 // GLFWOpenGLDriver uses with its m_mouseInput.
+//
+// shareDisplay/shareContext are unused in the adopt-Qt-context path (kept for
+// the fallback shared-context design); WE renders on whatever GL context is
+// current when the host drives a frame.
 CFboOpenGLDriver::CFboOpenGLDriver(
     ApplicationContext& context,
     WallpaperApplication& app,
@@ -18,21 +24,19 @@ CFboOpenGLDriver::CFboOpenGLDriver(
     , m_context(context)
     , m_shareDisplay(shareDisplay)
     , m_shareContext(shareContext) {
-	// TODO(embed): create an EGLContext on m_shareDisplay with m_shareContext as
-	// share_context (compatible config, GLES2/3). The host makes it - or its own
-	// context that shares with it - current before dispatchEventQueue().
+	// WE's GL calls go through glew's global function pointers; initialize them
+	// against the current (host) context. Harmless if already initialized.
+	glewExperimental = GL_TRUE;
+	glewInit();
 	this->m_output = new Output::CFboWindowOutput(context, *this, size);
 }
 
-CFboOpenGLDriver::~CFboOpenGLDriver() {
-	delete this->m_output;
-	// TODO(embed): eglDestroyContext(...)
-}
+CFboOpenGLDriver::~CFboOpenGLDriver() { delete this->m_output; }
 
 float CFboOpenGLDriver::getRenderTime() const {
-	// TODO(embed): monotonic seconds since start (WE uses this for animation).
-	// Prefer feeding the host's frame clock so WE animates in step with Qt.
-	return 0.0f;
+	using namespace std::chrono;
+	static const auto start = steady_clock::now();
+	return duration<float>(steady_clock::now() - start).count();
 }
 
 glm::ivec2 CFboOpenGLDriver::getFramebufferSize() const {
@@ -45,21 +49,19 @@ void CFboOpenGLDriver::resizeWindow(glm::ivec4 sizeAndPos) {
 }
 
 void* CFboOpenGLDriver::getProcAddress(const char* name) const {
-	// TODO(embed): return reinterpret_cast<void*>(eglGetProcAddress(name));
-	(void) name;
-	return nullptr;
+	return reinterpret_cast<void*>(eglGetProcAddress(name));
 }
 
-// The per-frame render, distilled from GLFWOpenGLDriver::dispatchEventQueue():
-// clear + let the app render each viewport into our FBO. Deliberately omits
-// glfwSwapBuffers / glfwPollEvents / usleep — the host (Quickshell) owns
-// presentation and frame pacing, and there is no window/input to service.
+// Per-frame render, distilled from GLFWOpenGLDriver::dispatchEventQueue(): clear
+// + let the app render each viewport. Deliberately omits glfwSwapBuffers /
+// glfwPollEvents / the FPS usleep - the host (Quickshell) owns present + pacing,
+// and there is no window/input to service. WE composites the final image into
+// the FBO the host set via WallpaperApplication::setDestinationFramebuffer().
 void CFboOpenGLDriver::dispatchEventQueue() {
-	// Host has the shared GL context current on its render thread.
 	for (const auto& [screen, viewport] : this->m_output->getViewports()) {
-		viewport->makeCurrent(); // bind FBO + set glViewport
-		// TODO(embed): glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		this->getApp().update(viewport); // WE renders the wallpaper into the FBO
+		viewport->makeCurrent(); // bind FBO + glViewport
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		this->getApp().update(viewport); // WE renders the wallpaper
 	}
 	this->m_output->updateRender(); // no-op for the FBO output
 	this->m_frameCounter++;

@@ -25,8 +25,11 @@ public:
 	// Nothing to present: the FBO color texture is live for the host each frame.
 	void updateRender() const override {}
 
-	// Host-facing: the FBO color attachment texture id, valid in the shared context.
+	// Host-facing: the FBO color attachment texture id (for the host to sample)
+	// and the FBO id (to feed WallpaperApplication::setDestinationFramebuffer so
+	// WE composites its final frame into this texture).
 	[[nodiscard]] unsigned int texture() const { return this->mTexture; }
+	[[nodiscard]] unsigned int fbo() const { return this->mFbo; }
 	void resize(glm::ivec2 size);
 
 private:

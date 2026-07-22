@@ -8,13 +8,15 @@ namespace WallpaperEngine::Render::Drivers::Output {
 // binds the FBO and sets the GL viewport; there is nothing to swap.
 class CFboOutputViewport final : public OutputViewport {
 public:
-	CFboOutputViewport(glm::ivec4 viewport, std::string name, unsigned int fbo);
+	// fbo points at the owning output's live FBO id (it changes on resize), so
+	// makeCurrent always binds the current framebuffer.
+	CFboOutputViewport(glm::ivec4 viewport, std::string name, const unsigned int* fbo);
 
-	void makeCurrent() override; // glBindFramebuffer(mFbo) + glViewport(viewport)
+	void makeCurrent() override; // glBindFramebuffer(*mFbo) + glViewport(viewport)
 	void swapOutput() override;  // glFlush() — the texture is presented by the host
 
 private:
-	unsigned int mFbo;
+	const unsigned int* mFbo;
 };
 
 } // namespace WallpaperEngine::Render::Drivers::Output

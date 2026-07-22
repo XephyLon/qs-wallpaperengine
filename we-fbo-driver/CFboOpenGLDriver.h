@@ -42,8 +42,10 @@ public:
 	void dispatchEventQueue() override; // renders one frame into the FBO
 	[[nodiscard]] void* getProcAddress(const char* name) const override; // eglGetProcAddress
 
-	// Host-facing: FBO color texture id (valid in the shared context after a frame).
+	// Host-facing: FBO color texture id (sample this) and FBO id (feed to
+	// WallpaperApplication::setDestinationFramebuffer so WE composites into it).
 	[[nodiscard]] unsigned int texture() const { return this->m_output->texture(); }
+	[[nodiscard]] unsigned int fbo() const { return this->m_output->fbo(); }
 
 private:
 	ApplicationContext& m_context;
