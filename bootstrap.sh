@@ -30,14 +30,20 @@ clone_at() { # url dir commit
 
 echo "==> [1/4] linux-wallpaperengine @ $WE_COMMIT"
 clone_at "$WE_URL" "$WE_SRC" "$WE_COMMIT"
-# Overlay the FBO output driver.
-cp "$HERE/we-fbo-driver/CFboOutput.hpp" "$WE_SRC/src/WallpaperEngine/Render/Drivers/"
-cp "$HERE/we-fbo-driver/CFboOutput.cpp" "$WE_SRC/src/WallpaperEngine/Render/Drivers/"
+# Overlay the FBO driver (CFboOpenGLDriver) + its Output/Viewport.
+WE_DRV="$WE_SRC/src/WallpaperEngine/Render/Drivers"
+cp "$HERE/we-fbo-driver/CFboOpenGLDriver.hpp" "$WE_DRV/CFboOpenGLDriver.h" 2>/dev/null || \
+cp "$HERE/we-fbo-driver/CFboOpenGLDriver.h"   "$WE_DRV/"
+cp "$HERE/we-fbo-driver/CFboOpenGLDriver.cpp" "$WE_DRV/"
+cp "$HERE/we-fbo-driver/CFboWindowOutput.h"   "$WE_DRV/Output/"
+cp "$HERE/we-fbo-driver/CFboWindowOutput.cpp" "$WE_DRV/Output/"
+cp "$HERE/we-fbo-driver/CFboOutputViewport.h" "$WE_DRV/Output/"
+cp "$HERE/we-fbo-driver/CFboOutputViewport.cpp" "$WE_DRV/Output/"
 cat <<'EOF'
   MANUAL (once): in linux-wallpaperengine
-    - add CFboOutput.cpp to the driver sources in src/CMakeLists.txt
-    - reconcile CFboOutput's base class / virtuals against
-      src/WallpaperEngine/Render/Drivers/CVideoDriver.h (see we-fbo-driver/README.md)
+    - add the four CFbo*.cpp to the driver sources in src/CMakeLists.txt
+    - resolve the VideoDriver ctor mouse-input arg (null MouseInput) and the
+      EGL shared-context creation in CFboOpenGLDriver (see we-fbo-driver/README.md)
     - ensure the build produces liblinux-wallpaperengine-lib.so + installs the
       WallpaperEngine/Render/** headers (needed by the Quickshell module)
 EOF

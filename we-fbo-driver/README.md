@@ -37,17 +37,43 @@ Two options:
 Start with (1); the surface (`../quickshell-module`) drives `renderFrame()` from
 `QQuickWindow::beforeRendering` with Qt's GL context current.
 
-## Files
+## Files (reconciled against the real WE headers)
 
-- `CFboOutput.hpp/.cpp` — the VideoDriver subclass + its OutputViewport.
-  Method signatures are stubbed `TODO` until reconciled against the real headers
-  the from-source build exposes (`WallpaperEngine/Render/Drivers/CVideoDriver.h`
-  and friends — the packaged `-git` ships only vendored-dep headers, not these).
+The real structure is three classes — `VideoDriver → Output → OutputViewport`
+(my first pass conflated them). Modeled 1:1 on the GLFW windowed path:
+
+- `CFboOpenGLDriver.h/.cpp` — `: VideoDriver`. Owns the shared EGL context and
+  the output; `dispatchEventQueue()` renders one frame into the FBO (clear +
+  `getApp().update(viewport)` per viewport) and **omits** `glfwSwapBuffers` /
+  `glfwPollEvents` / the FPS `usleep` — the host owns present + pacing.
+  Exposes `texture()` (FBO color attachment) for the host.
+- `CFboWindowOutput.h/.cpp` — `: Output`. Owns the FBO (color texture +
+  depth/stencil), one viewport. `renderVFlip()=true` (GL bottom-up),
+  `haveImageBuffer()=false` (texture, not CPU readback), `updateRender()` no-op.
+- `CFboOutputViewport.h/.cpp` — `: OutputViewport`. `makeCurrent()` binds the FBO
+  and sets `glViewport`; `swapOutput()` flushes.
+
+Verified virtuals: `VideoDriver` = getOutput/getRenderTime/closeRequested/
+resizeWindow×2/show|hideWindow/getFramebufferSize/getFrameCounter/getProcAddress/
+dispatchEventQueue (ctor takes `WallpaperApplication&` + `Input::MouseInput&`).
+`Output` = reset/renderVFlip/renderMultiple/haveImageBuffer/getImageBuffer/
+getImageBufferSize/updateRender. `OutputViewport` = makeCurrent/swapOutput.
+
+## Remaining TODOs (the real compile-iteration work)
+
+1. **Mouse input**: `VideoDriver`'s ctor needs an `Input::MouseInput&`. GLFW
+   passes `GLFWMouseInput`; a headless FBO needs a null one — check
+   `Input/MouseInput.h` for a usable concrete or add `NullMouseInput`.
+2. **EGL shared context**: create the WE `EGLContext` with the host's as
+   `share_context` so `texture()` is valid in Qt's context (see main README §
+   "Context sharing"). Feed WE's `getRenderTime()` from the host frame clock so
+   animation steps with Qt.
+3. Fill the GL bodies (FBO alloc in `ensureFbo`, bind in `makeCurrent`, clear in
+   `dispatchEventQueue`).
 
 ## Applying
 
-`bootstrap.sh` copies these into the WE source under
-`src/WallpaperEngine/Render/Drivers/`, registers `CFboOutput` in the driver
-CMake list, and (optionally) adds a `--output fbo` selection path so the same
-binary can still run standalone for testing. For the embed, Quickshell links the
-lib and constructs `CFboOutput` directly.
+`bootstrap.sh` copies the driver into `src/WallpaperEngine/Render/Drivers/` and
+the output/viewport into `.../Drivers/Output/`. Add the four `.cpp` to the driver
+sources in `src/CMakeLists.txt`. For the embed, Quickshell links the lib and
+constructs `CFboOpenGLDriver` directly with the host EGL display/context.

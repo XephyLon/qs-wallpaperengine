@@ -6,11 +6,11 @@
 #include <qsgsimpletexturenode.h>
 #include <qsgtexture.h>
 
-// TODO(embed): include linux-wallpaperengine's public headers once the
-// from-source build installs them, e.g.:
+// TODO(embed): include linux-wallpaperengine's headers from the from-source tree:
+//   #include <WallpaperEngine/Application/ApplicationContext.h>
 //   #include <WallpaperEngine/Application/WallpaperApplication.h>
 //   #include <WallpaperEngine/Render/RenderContext.h>
-//   #include "we-fbo-driver/CFboOutput.hpp"   // our VideoDriver/OutputViewport
+//   #include <WallpaperEngine/Render/Drivers/CFboOpenGLDriver.h>  // our driver
 
 namespace qs::wallpaperengine {
 
@@ -22,12 +22,15 @@ class WallpaperEngineContext {
 public:
 	explicit WallpaperEngineContext(QQuickWindow* window) : window(window) {
 		// TODO(embed):
-		// 1. Grab Quickshell's GL context/EGLDisplay from `window`
-		//    (QSGRendererInterface::getResource(window, OpenGLContextResource)).
-		// 2. Create a WE ApplicationContext in "window/offscreen" mode.
-		// 3. Instantiate CFboOutput (our VideoDriver) bound to a shared GL
-		//    context so the FBO's color texture is importable by Qt.
-		// 4. Build RenderContext(videoDriver, application, mediaSource).
+		// 1. Grab Quickshell's EGLDisplay/EGLContext from `window`
+		//    (QSGRendererInterface::getResource, GraphicsDeviceResource /
+		//    OpenGLContextResource) to pass as the share context.
+		// 2. Build a WE ApplicationContext (project path, fps, scaling) +
+		//    WallpaperApplication.
+		// 3. driver = new CFboOpenGLDriver(appContext, app, eglDisplay,
+		//    eglShareContext, size); shares GL objects so texture() is valid in
+		//    Qt's context.
+		// 4. renderContext = new RenderContext(*driver, app, mediaSource).
 	}
 
 	~WallpaperEngineContext() {
@@ -40,17 +43,18 @@ public:
 		return false;
 	}
 
-	// Renders one frame into the FBO. Call on the render thread with the GL
-	// context current. Sets `size` to the rendered dimensions.
+	// Renders one frame into the FBO. Call on the render thread with the shared
+	// GL context current. Sets `size` to the rendered dimensions.
 	void renderFrame(QSize& /*size*/) {
-		// TODO(embed): renderContext->render(&outputViewport);
-		// The CFboOutput viewport targets our FBO; after render, its color
-		// attachment texture id is `textureId()`.
+		// TODO(embed): driver->dispatchEventQueue();
+		// That binds the FBO and runs app.update(viewport) into it. After it
+		// returns, driver->texture() holds the frame. Set size from
+		// driver->getFramebufferSize().
 	}
 
 	// GL texture id of the FBO color attachment (valid after renderFrame).
 	[[nodiscard]] unsigned int textureId() const {
-		return 0; // TODO(embed): return fbo color attachment
+		return 0; // TODO(embed): return driver->texture();
 	}
 
 	[[nodiscard]] bool valid() const { return this->ready; }
