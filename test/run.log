@@ -1,0 +1,260 @@
+[32m  INFO[0m: Launching config: "/home/xephy/dev/qs-wallpaperengine/test/shell.qml"
+[32m  INFO[0m: Shell ID: "0ae0ec893ad7c7e789bad99b13cfe17a" Path ID "0ae0ec893ad7c7e789bad99b13cfe17a"
+[32m  INFO[0m: Saving logs to "/run/user/1000/quickshell/by-id/2vcp1jnhkit/log.qslog"
+[32m  INFO[0m: Configuration Loaded
+Running with: linux-wallpaperengine --window 0x0x580x340 --assets-dir /home/xephy/.local/share/Steam/steamapps/common/wallpaper_engine/assets --silent /home/xephy/.local/share/Steam/steamapps/workshop/content/431960/3008040633 
+[33m  WARN[0m: Attempted to call beginFrame() within a still active frame; ignored
+
+(quickshell:2862686): Gtk-WARNING **: 11:16:32.227: Theme directory status/32 of theme breeze-plus-dark has no size field
+
+
+(quickshell:2862686): Gtk-WARNING **: 11:16:32.227: Theme directory status/48 of theme breeze-plus-dark has no size field
+
+
+(quickshell:2862686): Gtk-WARNING **: 11:16:32.227: Theme directory status/64 of theme breeze-plus-dark has no size field
+
+Running with: linux-wallpaperengine --window 0x0x580x340 --assets-dir /home/xephy/.local/share/Steam/steamapps/common/wallpaper_engine/assets --silent /home/xephy/.local/share/Steam/steamapps/workshop/content/431960/3008040633 
+
+(quickshell:2862686): Gtk-WARNING **: 11:16:32.684: gtk_disable_setlocale() must be called before gtk_init()
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct qt_buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+};
+
+uniform qt_buf qt_ubuf;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+attribute vec4 qt_Vertex;
+attribute float _qt_order;
+
+void main()
+{
+    qt_TexCoord0 = qt_MultiTexCoord0;
+    gl_Position = qt_ubuf.qt_Matrix * qt_Vertex;
+    gl_Position.z = _qt_order * gl_Position.w;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    float xStep;
+    float yStep;
+};
+
+uniform buf _21;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+varying vec2 qt_TexCoord1;
+varying vec2 qt_TexCoord2;
+varying vec2 qt_TexCoord3;
+attribute vec4 qt_Vertex;
+
+void main()
+{
+    qt_TexCoord0 = vec2(qt_MultiTexCoord0.x + _21.xStep, qt_MultiTexCoord0.y + (_21.yStep * 0.36000001430511474609375));
+    qt_TexCoord1 = vec2(qt_MultiTexCoord0.x + (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y - _21.yStep);
+    qt_TexCoord2 = vec2(qt_MultiTexCoord0.x - (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y + _21.yStep);
+    qt_TexCoord3 = vec2(qt_MultiTexCoord0.x - _21.xStep, qt_MultiTexCoord0.y - (_21.yStep * 0.36000001430511474609375));
+    gl_Position = _21.qt_Matrix * qt_Vertex;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    float xStep;
+    float yStep;
+};
+
+uniform buf _21;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+varying vec2 qt_TexCoord1;
+varying vec2 qt_TexCoord2;
+varying vec2 qt_TexCoord3;
+attribute vec4 qt_Vertex;
+
+void main()
+{
+    qt_TexCoord0 = vec2(qt_MultiTexCoord0.x + _21.xStep, qt_MultiTexCoord0.y + (_21.yStep * 0.36000001430511474609375));
+    qt_TexCoord1 = vec2(qt_MultiTexCoord0.x + (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y - _21.yStep);
+    qt_TexCoord2 = vec2(qt_MultiTexCoord0.x - (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y + _21.yStep);
+    qt_TexCoord3 = vec2(qt_MultiTexCoord0.x - _21.xStep, qt_MultiTexCoord0.y - (_21.yStep * 0.36000001430511474609375));
+    gl_Position = _21.qt_Matrix * qt_Vertex;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    float xStep;
+    float yStep;
+};
+
+uniform buf _21;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+varying vec2 qt_TexCoord1;
+varying vec2 qt_TexCoord2;
+varying vec2 qt_TexCoord3;
+attribute vec4 qt_Vertex;
+
+void main()
+{
+    qt_TexCoord0 = vec2(qt_MultiTexCoord0.x + _21.xStep, qt_MultiTexCoord0.y + (_21.yStep * 0.36000001430511474609375));
+    qt_TexCoord1 = vec2(qt_MultiTexCoord0.x + (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y - _21.yStep);
+    qt_TexCoord2 = vec2(qt_MultiTexCoord0.x - (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y + _21.yStep);
+    qt_TexCoord3 = vec2(qt_MultiTexCoord0.x - _21.xStep, qt_MultiTexCoord0.y - (_21.yStep * 0.36000001430511474609375));
+    gl_Position = _21.qt_Matrix * qt_Vertex;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    float xStep;
+    float yStep;
+};
+
+uniform buf _21;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+varying vec2 qt_TexCoord1;
+varying vec2 qt_TexCoord2;
+varying vec2 qt_TexCoord3;
+attribute vec4 qt_Vertex;
+
+void main()
+{
+    qt_TexCoord0 = vec2(qt_MultiTexCoord0.x + _21.xStep, qt_MultiTexCoord0.y + (_21.yStep * 0.36000001430511474609375));
+    qt_TexCoord1 = vec2(qt_MultiTexCoord0.x + (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y - _21.yStep);
+    qt_TexCoord2 = vec2(qt_MultiTexCoord0.x - (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y + _21.yStep);
+    qt_TexCoord3 = vec2(qt_MultiTexCoord0.x - _21.xStep, qt_MultiTexCoord0.y - (_21.yStep * 0.36000001430511474609375));
+    gl_Position = _21.qt_Matrix * qt_Vertex;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+    float xStep;
+    float yStep;
+};
+
+uniform buf _21;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+varying vec2 qt_TexCoord1;
+varying vec2 qt_TexCoord2;
+varying vec2 qt_TexCoord3;
+attribute vec4 qt_Vertex;
+
+void main()
+{
+    qt_TexCoord0 = vec2(qt_MultiTexCoord0.x + _21.xStep, qt_MultiTexCoord0.y + (_21.yStep * 0.36000001430511474609375));
+    qt_TexCoord1 = vec2(qt_MultiTexCoord0.x + (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y - _21.yStep);
+    qt_TexCoord2 = vec2(qt_MultiTexCoord0.x - (_21.xStep * 0.36000001430511474609375), qt_MultiTexCoord0.y + _21.yStep);
+    qt_TexCoord3 = vec2(qt_MultiTexCoord0.x - _21.xStep, qt_MultiTexCoord0.y - (_21.yStep * 0.36000001430511474609375));
+    gl_Position = _21.qt_Matrix * qt_Vertex;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct qt_buf
+{
+    mat4 qt_Matrix;
+    float qt_Opacity;
+};
+
+uniform qt_buf qt_ubuf;
+
+varying vec2 qt_TexCoord0;
+attribute vec2 qt_MultiTexCoord0;
+attribute vec4 qt_Vertex;
+attribute float _qt_order;
+
+void main()
+{
+    qt_TexCoord0 = qt_MultiTexCoord0;
+    gl_Position = qt_ubuf.qt_Matrix * qt_Vertex;
+    gl_Position.z = _qt_order * gl_Position.w;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 100
+
+struct buf
+{
+    mat4 matrix;
+    vec2 textureScale;
+    vec4 color;
+    float alphaMin;
+    float alphaMax;
+};
+
+uniform buf _17;
+
+varying vec2 sampleCoord;
+attribute vec2 tCoord;
+attribute vec4 vCoord;
+attribute float _qt_order;
+
+void main()
+{
+    sampleCoord = tCoord * _17.textureScale;
+    gl_Position = _17.matrix * vCoord;
+    gl_Position.z = _qt_order * gl_Position.w;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[0m: Attempted to call endFrame() without an active frame; ignored

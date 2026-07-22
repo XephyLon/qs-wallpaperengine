@@ -68,30 +68,48 @@ public:
 		ensureDriverRegistered();
 
 		// Synthesize argv so WE's normal CLI parser fills ApplicationContext
-		// (mode=EXPLICIT_WINDOW + geometry + project). Simplest correct path.
+		// (mode=EXPLICIT_WINDOW + geometry + project). --assets-dir is required
+		// when embedded: WE auto-detects its base assets relative to the
+		// linux-wallpaperengine binary, which doesn't exist here (binary is
+		// quickshell), so the mount fails without it.
+		// TODO(embed): expose assetsDir as a QML property instead of the default.
 		const std::string geo =
 		    "0x0x" + std::to_string(width) + "x" + std::to_string(height);
 		this->project = projectPath.toStdString();
+		const std::string assetsDir =
+		    std::string(qgetenv("HOME").constData())
+		    + "/.local/share/Steam/steamapps/common/wallpaper_engine/assets";
 		std::vector<char*> argv {
 		    const_cast<char*>("linux-wallpaperengine"),
 		    const_cast<char*>("--window"),
 		    const_cast<char*>(geo.c_str()),
+		    const_cast<char*>("--assets-dir"),
+		    const_cast<char*>(assetsDir.c_str()),
 		    const_cast<char*>("--silent"),
 		    const_cast<char*>(this->project.c_str()),
 		};
 
-		this->window->beginExternalCommands();
-		this->appContext = std::make_unique<we::Application::ApplicationContext>(
-		    static_cast<int>(argv.size()), argv.data()
-		);
-		this->app = std::make_unique<we::Application::WallpaperApplication>(*this->appContext);
-		this->app->setup(); // creates our driver (factory) + loads the wallpaper
-		this->driver = pendingDriverSlot();
-		pendingDriverSlot() = nullptr;
-		if (this->driver) this->app->setDestinationFramebuffer(this->driver->fbo());
-		this->window->endExternalCommands();
-
-		this->ready = this->driver != nullptr;
+		try {
+			this->window->beginExternalCommands();
+			this->appContext = std::make_unique<we::Application::ApplicationContext>(
+			    static_cast<int>(argv.size()), argv.data()
+			);
+			// The ctor only stores argc/argv; this does the actual parse
+			// (mode, geometry, project, assets). Missing this was why nothing
+			// was configured.
+			this->appContext->loadSettingsFromArgv();
+			this->app = std::make_unique<we::Application::WallpaperApplication>(*this->appContext);
+			this->app->setup(); // creates our driver (factory) + loads the wallpaper
+			this->driver = pendingDriverSlot();
+			pendingDriverSlot() = nullptr;
+			if (this->driver) this->app->setDestinationFramebuffer(this->driver->fbo());
+			this->window->endExternalCommands();
+			this->ready = this->driver != nullptr;
+		} catch (const std::exception& e) {
+			this->window->endExternalCommands();
+			qWarning("WallpaperEngineSurface: failed to start Wallpaper Engine: %s", e.what());
+			this->ready = false;
+		}
 	}
 
 	~WallpaperEngineContext() {
