@@ -70,14 +70,19 @@ export WALLPAPERENGINE_INCLUDE_DIR="$WE_SRC/src"
 
 echo "==> [2/4] quickshell @ $QS_COMMIT"
 clone_at "$QS_URL" "$QS_SRC" "$QS_COMMIT"
-# Overlay the QML module.
+# Overlay the QML module + register it in src/CMakeLists.txt.
 rm -rf "$QS_SRC/src/wallpaperengine"
 cp -r "$HERE/quickshell-module" "$QS_SRC/src/wallpaperengine"
+if ! grep -q 'add_subdirectory(wallpaperengine)' "$QS_SRC/src/CMakeLists.txt"; then
+	printf '\nadd_subdirectory(wallpaperengine)\n' >> "$QS_SRC/src/CMakeLists.txt"
+fi
+# The module CMakeLists compiles the FBO driver from the WE tree and links the
+# installed WE lib; point it at the cloned WE source headers.
+export WALLPAPERENGINE_SRC="$WE_SRC/src"
 cat <<'EOF'
-  MANUAL (once): in quickshell (see quickshell-module/INTEGRATION.md)
-    - add_subdirectory(wallpaperengine) in src/CMakeLists.txt
-    - link the module into the plugin aggregate, mirroring another leaf module
-    - replace the reference CMakeLists block with quickshell's qs_module macro
+  DONE automatically: module copied + add_subdirectory(wallpaperengine) added.
+  Module CMake mirrors Quickshell's leaf pattern (qt_add_qml_module +
+  qs_add_module_deps_light + install_qml_module) and links the installed WE lib.
 EOF
 
 echo "==> [3/4] build quickshell"
