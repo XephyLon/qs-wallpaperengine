@@ -33,6 +33,10 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// Scaling mode: "fill" (crop to cover, default), "fit" (letterbox),
 	/// "stretch" (distort to fill), or "default" (native, centered).
 	Q_PROPERTY(QString scaleMode READ scaleMode WRITE setScaleMode NOTIFY scaleModeChanged);
+	/// True once the current project has produced its first rendered frame.
+	/// Resets to false when projectPath changes. Lets QML start a wallpaper
+	/// transition only when there is real content to show (not a black frame).
+	Q_PROPERTY(bool rendered READ rendered NOTIFY renderedChanged);
 	// clang-format on
 
 public:
@@ -52,11 +56,14 @@ public:
 	[[nodiscard]] QString scaleMode() const { return this->mScaleMode; }
 	void setScaleMode(const QString& scaleMode);
 
+	[[nodiscard]] bool rendered() const { return this->mRendered; }
+
 signals:
 	void projectPathChanged();
 	void liveChanged();
 	void fpsChanged();
 	void scaleModeChanged();
+	void renderedChanged();
 
 protected:
 	QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
@@ -66,6 +73,8 @@ private:
 	bool mLive = true;
 	int mFps = 60;
 	QString mScaleMode = QStringLiteral("fill");
+	bool mRendered = false;      // first frame of the current project seen (GUI thread)
+	bool mLoadFrameSeen = false; // per-load latch (render thread only)
 
 	// Declared before mThread so it outlives it: the thread uses this context's
 	// native EGLContext and must be joined before the context is destroyed.

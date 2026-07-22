@@ -93,6 +93,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 
 		this->mShareContext = std::move(share);
 		this->mLoadedPath = this->mProjectPath;
+		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
 		    this->mFps, this->mScaleMode.toStdString()
@@ -101,6 +102,22 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 
 	GLuint texId = this->mThread ? this->mThread->acquireTexture() : 0;
 	if (texId == 0) return node; // nothing ready yet; timer will retry
+
+	// First real frame of this project: tell QML (on the GUI thread) so a
+	// wallpaper transition can start against actual content, not a black frame.
+	if (!this->mLoadFrameSeen) {
+		this->mLoadFrameSeen = true;
+		QMetaObject::invokeMethod(
+		    this,
+		    [this] {
+			    if (!this->mRendered) {
+				    this->mRendered = true;
+				    emit this->renderedChanged();
+			    }
+		    },
+		    Qt::QueuedConnection
+		);
+	}
 
 	if (!node) {
 		node = new QSGSimpleTextureNode();
@@ -129,6 +146,10 @@ void WallpaperEngineSurface::setProjectPath(const QString& projectPath) {
 	if (projectPath == this->mProjectPath) return;
 	this->mProjectPath = projectPath;
 	emit this->projectPathChanged();
+	if (this->mRendered) {
+		this->mRendered = false;
+		emit this->renderedChanged();
+	}
 	this->updateRepaintTimer();
 	this->update();
 }
