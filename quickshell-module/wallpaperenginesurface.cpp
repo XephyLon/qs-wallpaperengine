@@ -89,11 +89,6 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 
 	GLuint texId = this->mThread ? this->mThread->acquireTexture() : 0;
 	if (texId == 0) return node; // nothing ready yet; timer will retry
-	static bool logged = false;
-	if (!logged) {
-		logged = true;
-		qWarning("WallpaperEngineSurface: first texture acquired: %u", texId);
-	}
 
 	if (!node) {
 		node = new QSGSimpleTextureNode();

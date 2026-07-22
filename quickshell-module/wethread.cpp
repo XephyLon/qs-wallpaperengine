@@ -214,7 +214,6 @@ void WeThread::run() {
 			this->mFrontFence = sync;
 		}
 		if (oldSync) glDeleteSync(oldSync);
-		if (!this->mReady) std::fprintf(stderr, "WeThread: first frame published tex=%u\n", tgt.texture);
 		this->mReady = true;
 		back ^= 1;
 
