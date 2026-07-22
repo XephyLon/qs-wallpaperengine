@@ -46,6 +46,47 @@ cp "$HERE/we-fbo-driver/NullMouseInput.h" "$WE_SRC/src/WallpaperEngine/Input/"
 sed -i 's/cur->second.emplace (xdgSessionType, factory);/cur->second.insert_or_assign (xdgSessionType, factory);/; s/map.emplace (xdgSessionType, factory);/map.insert_or_assign (xdgSessionType, factory);/' \
 	"$WE_SRC/src/WallpaperEngine/Render/Drivers/VideoFactories.cpp"
 
+# WallpaperApplication patches (idempotent):
+#  (1) skip setupBrowser() - CEF (Chromium) deadlocks on Quickshell's render
+#      thread; scene/video wallpapers don't need it.
+#  (2) expose the first wallpaper's scene framebuffer so the host can blit WE's
+#      rendered frame (RenderContext renders the scene into the wallpaper's own
+#      FBO, not the driver output).
+python3 - "$WE_SRC/src/WallpaperEngine/Application/WallpaperApplication.cpp" \
+         "$WE_SRC/src/WallpaperEngine/Application/WallpaperApplication.h" <<'PY'
+import sys
+cpp_p, h_p = sys.argv[1], sys.argv[2]
+
+cpp = open(cpp_p).read()
+if "// this->setupBrowser ();" not in cpp:
+    cpp = cpp.replace(
+        "    this->setupBrowser ();\n",
+        "    // EMBED PATCH: setupBrowser() initializes CEF (Chromium), which deadlocks\n"
+        "    // when run on Quickshell's render thread (GTK + subprocess message loop).\n"
+        "    // Scene/video wallpapers do not need it.\n"
+        "    // this->setupBrowser ();\n",
+        1,
+    )
+if "getFirstWallpaperFramebuffer" not in cpp:
+    anchor = ("GLuint WallpaperApplication::getDestinationFramebuffer () const "
+              "{ return this->m_destinationFramebuffer; }\n")
+    cpp = cpp.replace(anchor, anchor +
+        "\nGLuint WallpaperApplication::getFirstWallpaperFramebuffer () const {\n"
+        "    const auto& w = this->m_renderContext->getWallpapers ();\n"
+        "    return w.empty () ? 0 : w.begin ()->second->getWallpaperFramebuffer ();\n"
+        "}\n", 1)
+open(cpp_p, "w").write(cpp)
+
+h = open(h_p).read()
+if "getFirstWallpaperFramebuffer" not in h:
+    anchor = "    [[nodiscard]] GLuint getDestinationFramebuffer () const;\n"
+    h = h.replace(anchor, anchor +
+        "\n    // Host embedding: the first wallpaper's scene framebuffer (where WE\n"
+        "    // renders the final frame). 0 if none.\n"
+        "    [[nodiscard]] GLuint getFirstWallpaperFramebuffer () const;\n", 1)
+open(h_p, "w").write(h)
+PY
+
 # Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
 WE_CMAKE="$WE_SRC/CMakeLists.txt"
 if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then
