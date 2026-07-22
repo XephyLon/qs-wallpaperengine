@@ -28,7 +28,8 @@ public:
 	    std::string assetsDir,
 	    int width,
 	    int height,
-	    int fps
+	    int fps,
+	    std::string scaleMode
 	);
 	~WeThread();
 
@@ -50,6 +51,7 @@ private:
 	void* mContext;
 	std::string mProjectPath;
 	std::string mAssetsDir;
+	std::string mScaleMode;
 	int mWidth;
 	int mHeight;
 

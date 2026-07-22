@@ -30,6 +30,9 @@ class WallpaperEngineSurface: public QQuickItem {
 	Q_PROPERTY(bool live READ live WRITE setLive NOTIFY liveChanged);
 	/// Target FPS while live. Default 60.
 	Q_PROPERTY(int fps READ fps WRITE setFps NOTIFY fpsChanged);
+	/// Scaling mode: "fill" (crop to cover, default), "fit" (letterbox),
+	/// "stretch" (distort to fill), or "default" (native, centered).
+	Q_PROPERTY(QString scaleMode READ scaleMode WRITE setScaleMode NOTIFY scaleModeChanged);
 	// clang-format on
 
 public:
@@ -46,10 +49,14 @@ public:
 	[[nodiscard]] int fps() const { return this->mFps; }
 	void setFps(int fps);
 
+	[[nodiscard]] QString scaleMode() const { return this->mScaleMode; }
+	void setScaleMode(const QString& scaleMode);
+
 signals:
 	void projectPathChanged();
 	void liveChanged();
 	void fpsChanged();
+	void scaleModeChanged();
 
 protected:
 	QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
@@ -58,6 +65,7 @@ private:
 	QString mProjectPath;
 	bool mLive = true;
 	int mFps = 60;
+	QString mScaleMode = QStringLiteral("fill");
 
 	// Declared before mThread so it outlives it: the thread uses this context's
 	// native EGLContext and must be joined before the context is destroyed.

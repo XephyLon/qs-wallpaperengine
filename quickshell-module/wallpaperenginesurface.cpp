@@ -95,7 +95,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		this->mLoadedPath = this->mProjectPath;
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
-		    this->mFps
+		    this->mFps, this->mScaleMode.toStdString()
 		);
 	}
 
@@ -147,6 +147,15 @@ void WallpaperEngineSurface::setFps(int fps) {
 	emit this->fpsChanged();
 	this->updateRepaintTimer();
 	if (this->mThread) this->mThread->setFps(fps);
+}
+
+void WallpaperEngineSurface::setScaleMode(const QString& scaleMode) {
+	if (scaleMode == this->mScaleMode) return;
+	this->mScaleMode = scaleMode;
+	emit this->scaleModeChanged();
+	// Scaling is a WE startup argument; rebuild the thread so it takes effect.
+	this->mLoadedPath.clear();
+	this->update();
 }
 
 } // namespace qs::wallpaperengine

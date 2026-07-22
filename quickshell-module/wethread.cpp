@@ -92,12 +92,14 @@ WeThread::WeThread(
     std::string assetsDir,
     int width,
     int height,
-    int fps
+    int fps,
+    std::string scaleMode
 )
     : mDisplay(display)
     , mContext(sharedContext)
     , mProjectPath(std::move(projectPath))
     , mAssetsDir(std::move(assetsDir))
+    , mScaleMode(std::move(scaleMode))
     , mWidth(width)
     , mHeight(height)
     , mFps(fps > 0 ? fps : 60) {
@@ -192,8 +194,12 @@ void WeThread::run() {
 	    const_cast<char*>("--silent"),
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
-	    const_cast<char*>(this->mProjectPath.c_str()),
 	};
+	if (!this->mScaleMode.empty()) {
+		argv.push_back(const_cast<char*>("--scaling"));
+		argv.push_back(const_cast<char*>(this->mScaleMode.c_str()));
+	}
+	argv.push_back(const_cast<char*>(this->mProjectPath.c_str()));
 
 	std::unique_ptr<we::Application::ApplicationContext> appContext;
 	std::unique_ptr<we::Application::WallpaperApplication> app;
@@ -228,13 +234,12 @@ void WeThread::run() {
 
 		auto& tgt = targets[back];
 		// app->render() advances g_Time (driver clock - else the scene freezes at
-		// t=0), updates audio/media, and calls dispatchEventQueue() which renders
-		// each viewport into the driver's output FBO and bumps the frame counter.
-		// Scenes land in that output FBO (driver->fbo()), not in
-		// setDestinationFramebuffer, so blit it into our double-buffered target.
+		// t=0), updates audio/media, and drives the per-frame render + frame
+		// counter. WE renders scenes into the wallpaper's OWN scene FBO
+		// (getFirstWallpaperFramebuffer); the setDestinationFramebuffer composite
+		// only works for some types (video), so blit the scene FBO into our
+		// double-buffered target - reliable for both scene and video.
 		app->render();
-		// WE renders the scene into the wallpaper's OWN scene FBO; blit that (not
-		// the driver output) into our double-buffered target.
 		GLuint srcFb = app->getFirstWallpaperFramebuffer();
 		if (srcFb == 0) srcFb = driver->fbo();
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
