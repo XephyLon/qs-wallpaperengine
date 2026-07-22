@@ -195,6 +195,9 @@ void WeThread::run() {
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
 	};
+	// Pass the scaling mode: WE applies it for video wallpapers (which composite
+	// into the driver output, not a scene FBO). Scenes render into their own
+	// scene FBO at native projection and we scale those ourselves at blit time.
 	if (!this->mScaleMode.empty()) {
 		argv.push_back(const_cast<char*>("--scaling"));
 		argv.push_back(const_cast<char*>(this->mScaleMode.c_str()));
@@ -241,13 +244,57 @@ void WeThread::run() {
 		// double-buffered target - reliable for both scene and video.
 		app->render();
 		GLuint srcFb = app->getFirstWallpaperFramebuffer();
-		if (srcFb == 0) srcFb = driver->fbo();
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
+		const int srcW = app->getFirstWallpaperFramebufferWidth();
+		const int srcH = app->getFirstWallpaperFramebufferHeight();
+		// A real scene FBO (>= 64px) holds the wallpaper and we scale it ourselves
+		// per mode. A tiny/absent one means a video wallpaper, which WE already
+		// composited (scaled per --scaling) into the driver output FBO - blit that
+		// straight across.
+		// Fall back to the driver output only if there is genuinely no wallpaper
+		// FBO yet (very first frames); otherwise scale the wallpaper's real-sized
+		// scene/video FBO per the mode.
+		const bool sceneValid = srcFb != 0 && srcW >= 8 && srcH >= 8;
+
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
-		glBlitFramebuffer(
-		    0, 0, this->mWidth, this->mHeight, 0, 0, this->mWidth, this->mHeight,
-		    GL_COLOR_BUFFER_BIT, GL_LINEAR
-		);
+		if (!sceneValid) {
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, driver->fbo());
+			glBlitFramebuffer(
+			    0, 0, this->mWidth, this->mHeight, 0, 0, this->mWidth, this->mHeight,
+			    GL_COLOR_BUFFER_BIT, GL_LINEAR
+			);
+		} else {
+			int sx0 = 0, sy0 = 0, sx1 = srcW, sy1 = srcH;
+			int dx0 = 0, dy0 = 0, dx1 = this->mWidth, dy1 = this->mHeight;
+			const double srcA = static_cast<double>(srcW) / srcH;
+			const double dstA = static_cast<double>(this->mWidth) / this->mHeight;
+			if (this->mScaleMode == "stretch") {
+				// distort to fill: full source -> full target (defaults above).
+			} else if (this->mScaleMode == "fit") {
+				glClearColor(0.f, 0.f, 0.f, 1.f);
+				glClear(GL_COLOR_BUFFER_BIT); // letterbox bars
+				if (srcA > dstA) {
+					const int h = static_cast<int>(this->mWidth / srcA);
+					dy0 = (this->mHeight - h) / 2;
+					dy1 = dy0 + h;
+				} else {
+					const int w = static_cast<int>(this->mHeight * srcA);
+					dx0 = (this->mWidth - w) / 2;
+					dx1 = dx0 + w;
+				}
+			} else { // "fill"/"default": cover, crop the source center
+				if (srcA > dstA) {
+					const int w = static_cast<int>(srcH * dstA);
+					sx0 = (srcW - w) / 2;
+					sx1 = sx0 + w;
+				} else {
+					const int h = static_cast<int>(srcW / dstA);
+					sy0 = (srcH - h) / 2;
+					sy1 = sy0 + h;
+				}
+			}
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
+			glBlitFramebuffer(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 

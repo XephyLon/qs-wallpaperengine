@@ -74,6 +74,14 @@ if "getFirstWallpaperFramebuffer" not in cpp:
         "\nGLuint WallpaperApplication::getFirstWallpaperFramebuffer () const {\n"
         "    const auto& w = this->m_renderContext->getWallpapers ();\n"
         "    return w.empty () ? 0 : w.begin ()->second->getWallpaperFramebuffer ();\n"
+        "}\n"
+        "int WallpaperApplication::getFirstWallpaperFramebufferWidth () const {\n"
+        "    const auto& w = this->m_renderContext->getWallpapers ();\n"
+        "    return w.empty () ? 0 : (int) w.begin ()->second->getWallpaperFramebufferWidth ();\n"
+        "}\n"
+        "int WallpaperApplication::getFirstWallpaperFramebufferHeight () const {\n"
+        "    const auto& w = this->m_renderContext->getWallpapers ();\n"
+        "    return w.empty () ? 0 : (int) w.begin ()->second->getWallpaperFramebufferHeight ();\n"
         "}\n", 1)
 open(cpp_p, "w").write(cpp)
 
@@ -82,9 +90,36 @@ if "getFirstWallpaperFramebuffer" not in h:
     anchor = "    [[nodiscard]] GLuint getDestinationFramebuffer () const;\n"
     h = h.replace(anchor, anchor +
         "\n    // Host embedding: the first wallpaper's scene framebuffer (where WE\n"
-        "    // renders the final frame). 0 if none.\n"
-        "    [[nodiscard]] GLuint getFirstWallpaperFramebuffer () const;\n", 1)
+        "    // renders the final frame) and its real size (getWidth/getHeight -\n"
+        "    // video resolution for CVideo, camera projection for CScene). 0 if none.\n"
+        "    [[nodiscard]] GLuint getFirstWallpaperFramebuffer () const;\n"
+        "    [[nodiscard]] int getFirstWallpaperFramebufferWidth () const;\n"
+        "    [[nodiscard]] int getFirstWallpaperFramebufferHeight () const;\n", 1)
 open(h_p, "w").write(h)
+PY
+
+# CWallpaper: expose the scene FBO's size. GLPlayer resizes the video texture
+# but the CFBO object's stored size stays stale, so report the wallpaper's
+# logical size (getWidth/getHeight - video resolution for CVideo, camera for
+# CScene) which matches the resized texture.
+python3 - "$WE_SRC/src/WallpaperEngine/Render/CWallpaper.cpp" \
+         "$WE_SRC/src/WallpaperEngine/Render/CWallpaper.h" <<'PY'
+import sys
+cpp_p, h_p = sys.argv[1], sys.argv[2]
+cpp = open(cpp_p).read()
+if "getWallpaperFramebufferWidth" not in cpp:
+    anchor = "GLuint CWallpaper::getWallpaperFramebuffer () const { return this->m_sceneFBO->getFramebuffer (); }\n"
+    cpp = cpp.replace(anchor, anchor +
+        "uint32_t CWallpaper::getWallpaperFramebufferWidth () const { return (uint32_t) this->getWidth (); }\n"
+        "uint32_t CWallpaper::getWallpaperFramebufferHeight () const { return (uint32_t) this->getHeight (); }\n", 1)
+    open(cpp_p, "w").write(cpp)
+h = open(h_p).read()
+if "getWallpaperFramebufferWidth" not in h:
+    anchor = "    [[nodiscard]] virtual GLuint getWallpaperFramebuffer () const;\n"
+    h = h.replace(anchor, anchor +
+        "    [[nodiscard]] uint32_t getWallpaperFramebufferWidth () const;\n"
+        "    [[nodiscard]] uint32_t getWallpaperFramebufferHeight () const;\n", 1)
+    open(h_p, "w").write(h)
 PY
 
 # Prefer known-good hardware decoders (nvdec on NVIDIA) over mpv's full "auto",
