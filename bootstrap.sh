@@ -76,6 +76,28 @@ cp -r "$HERE/quickshell-module" "$QS_SRC/src/wallpaperengine"
 if ! grep -q 'add_subdirectory(wallpaperengine)' "$QS_SRC/src/CMakeLists.txt"; then
 	printf '\nadd_subdirectory(wallpaperengine)\n' >> "$QS_SRC/src/CMakeLists.txt"
 fi
+# Force Qt Quick onto DESKTOP OpenGL (default is GLES here). WE requires desktop
+# GL (EGL_OPENGL_BIT + glew) and GLES<->GL contexts can't share GL objects.
+if ! grep -q 'setRenderableType' "$QS_SRC/src/main.cpp"; then
+	cat > "$QS_SRC/src/main.cpp" <<'CPP'
+#include "launch/main.hpp"
+
+#include <QtGui/QSurfaceFormat>
+
+int main(int argc, char** argv) {
+	// linux-wallpaperengine needs a desktop OpenGL context; Qt Quick defaults to
+	// GLES here, and GLES<->desktop-GL contexts cannot share GL objects. Force
+	// desktop GL so the embedded WE context can share the wallpaper texture.
+	auto fmt = QSurfaceFormat::defaultFormat();
+	fmt.setRenderableType(QSurfaceFormat::OpenGL);
+	fmt.setVersion(4, 5);
+	fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
+	QSurfaceFormat::setDefaultFormat(fmt);
+
+	return qs::launch::main(argc, argv);
+}
+CPP
+fi
 # The module CMakeLists compiles the FBO driver from the WE tree and links the
 # installed WE lib; point it at the cloned WE source headers.
 export WALLPAPERENGINE_SRC="$WE_SRC/src"

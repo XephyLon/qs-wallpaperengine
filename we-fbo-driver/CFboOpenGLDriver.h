@@ -48,10 +48,25 @@ public:
 	[[nodiscard]] unsigned int fbo() const { return this->m_output->fbo(); }
 
 private:
+	// Make our WE EGL context current (surfaceless); saves the caller's (Qt's)
+	// context+surfaces so restoreHost() can put them back. All WE GL runs here so
+	// Qt's GL/RHI state is never touched.
+	void makeCurrentWe();
+	void restoreHost();
+
 	ApplicationContext& m_context;
 	Input::NullMouseInput m_mouseInput; // headless: no pointer
 	Output::CFboWindowOutput* m_output = nullptr;
-	void* m_shareDisplay = nullptr;
+
+	// EGL handles kept as void* so the header stays EGL-free.
+	void* m_display = nullptr;    // EGLDisplay (shared with Qt)
+	void* m_weContext = nullptr;  // our EGLContext, shares GL objects with Qt's
+	// Qt's current context/surfaces, saved across a WE frame.
+	void* m_savedContext = nullptr;
+	void* m_savedDrawSurface = nullptr;
+	void* m_savedReadSurface = nullptr;
+
+	void* m_shareDisplay = nullptr; // (unused; self-grabbed via eglGetCurrent*)
 	void* m_shareContext = nullptr;
 	uint32_t m_frameCounter = 0;
 };
