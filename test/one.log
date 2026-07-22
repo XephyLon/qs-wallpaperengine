@@ -1,0 +1,40 @@
+[32m  INFO[0m: Launching config: "/home/xephy/dev/qs-wallpaperengine/test/one.qml"
+[32m  INFO[0m: Shell ID: "789e4ac652fda0267327c446bf320674" Path ID "789e4ac652fda0267327c446bf320674"
+[32m  INFO[0m: Saving logs to "/run/user/1000/quickshell/by-id/i2av16fjkit/log.qslog"
+[32m  INFO[0m: Configuration Loaded
+Running with: linux-wallpaperengine --window 0x0x580x340 --silent --assets-dir /home/xephy/.local/share/Steam/steamapps/common/wallpaper_engine/assets /home/xephy/.local/share/Steam/steamapps/workshop/content/431960/3008040633 
+
+(quickshell:3139002): Gtk-WARNING **: 11:54:42.999: Theme directory status/32 of theme breeze-plus-dark has no size field
+
+
+(quickshell:3139002): Gtk-WARNING **: 11:54:42.999: Theme directory status/48 of theme breeze-plus-dark has no size field
+
+
+(quickshell:3139002): Gtk-WARNING **: 11:54:42.999: Theme directory status/64 of theme breeze-plus-dark has no size field
+
+[33m  WARN[0m: Failed to compile shader: 
+Source was:
+#version 150
+
+struct buf
+{
+    mat4 qt_Matrix;
+};
+
+uniform buf _25;
+
+out vec2 qt_TexCoord;
+in vec2 qt_VertexTexCoord;
+in vec4 qt_VertexPosition;
+in float _qt_order;
+
+void main()
+{
+    qt_TexCoord = qt_VertexTexCoord;
+    gl_Position = _25.qt_Matrix * qt_VertexPosition;
+    gl_Position.z = _qt_order * gl_Position.w;
+}
+
+
+[33m  WARN[0m: Failed to build graphics pipeline state
+[33m  WARN[97m qt.qpa.wayland[0m: eglSwapBuffers failed with 0x300d, surface: 0x7f9375967940

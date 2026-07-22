@@ -36,30 +36,16 @@ CFboOpenGLDriver::CFboOpenGLDriver(
 	// Grab it and create our own context that SHARES GL objects with it, so WE
 	// renders entirely on our context (Qt's state untouched) yet the FBO texture
 	// stays valid in Qt's context.
-	auto dpy = eglGetCurrentDisplay();
-	auto qtCtx = eglGetCurrentContext();
-	this->m_display = dpy;
-
-	if (dpy != EGL_NO_DISPLAY && qtCtx != EGL_NO_CONTEXT) {
-		auto cfg = configOfCurrentContext(dpy, qtCtx);
-		eglBindAPI(EGL_OPENGL_API); // WE is desktop GL (glew)
-		EGLint ctxAttr[] = {
-		    EGL_CONTEXT_MAJOR_VERSION, 3,
-		    EGL_CONTEXT_MINOR_VERSION, 3,
-		    EGL_NONE,
-		};
-		this->m_weContext = eglCreateContext(dpy, cfg, qtCtx, ctxAttr);
-		if (this->m_weContext == EGL_NO_CONTEXT) {
-			std::fprintf(stderr, "CFboOpenGLDriver: eglCreateContext failed: 0x%x\n", eglGetError());
-		}
-	}
-
-	// Build the FBO on OUR context so its texture belongs to the shared group.
-	this->makeCurrentWe();
+	// Run entirely on the host's (Qt's) current desktop-GL context. Qt's
+	// QQuickFramebufferObject makes its context current, binds the target FBO and
+	// brackets our render() call, so a separate/shared context is unnecessary
+	// (and switching contexts under Qt's RHI disrupts it). m_weContext stays null
+	// -> makeCurrentWe()/restoreHost() are no-ops.
+	this->m_display = eglGetCurrentDisplay();
+	(void) &configOfCurrentContext;
 	glewExperimental = GL_TRUE;
 	glewInit();
 	this->m_output = new Output::CFboWindowOutput(context, *this, size);
-	this->restoreHost();
 }
 
 CFboOpenGLDriver::~CFboOpenGLDriver() {

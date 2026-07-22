@@ -57,6 +57,7 @@ target_include_directories(quickshell-wallpaperengine PRIVATE
 
 target_link_libraries(quickshell-wallpaperengine PRIVATE
 	Qt::Quick
+	Qt::OpenGL
 	${WALLPAPERENGINE_LIB}
 	EGL
 	GLEW

@@ -1,20 +1,15 @@
-// glew must be included before any header that pulls in GL/gl.h (Qt Quick's GL
-// headers do). WE also uses glew, so include it first for the whole TU.
+// glew before any Qt GL header.
 #include <GL/glew.h>
 
 #include "wallpaperenginesurface.hpp"
 
-#include <qquickitem.h>
-#include <qquickwindow.h>
-#include <qsgnode.h>
-#include <qsgsimpletexturenode.h>
-#include <qsgtexture.h>
+#include <qopenglframebufferobject.h>
+#include <qquickframebufferobject.h>
 
 #include <memory>
 #include <string>
 #include <vector>
 
-// linux-wallpaperengine (from-source tree; the packaged -git omits these headers)
 #include <WallpaperEngine/Application/ApplicationContext.h>
 #include <WallpaperEngine/Application/WallpaperApplication.h>
 #include <WallpaperEngine/Render/Drivers/CFboOpenGLDriver.h>
@@ -25,10 +20,6 @@ namespace qs::wallpaperengine {
 namespace {
 namespace we = WallpaperEngine;
 
-// Register our FBO driver for EXPLICIT_WINDOW once. Runs after WE's own
-// __attribute__((constructor)) registrations, so it overrides GLFW for that
-// mode. The factory stashes the created driver into a thread-local slot so the
-// context that triggered setup() can reach it (fbo()/texture()).
 we::Render::Drivers::CFboOpenGLDriver*& pendingDriverSlot() {
 	static thread_local we::Render::Drivers::CFboOpenGLDriver* slot = nullptr;
 	return slot;
@@ -43,215 +34,145 @@ void ensureDriverRegistered() {
 	    DEFAULT_WINDOW_NAME,
 	    [](we::Application::ApplicationContext& ctx, we::Application::WallpaperApplication& app)
 	        -> std::unique_ptr<we::Render::Drivers::VideoDriver> {
-		    // Size comes from --window geometry parsed into the context; adopt
-		    // the current (Qt) context, so no share display/context.
-		    // TODO(embed): read the parsed window size from `ctx` instead of a
-		    // placeholder; ApplicationContext stores the EXPLICIT_WINDOW size.
-		    glm::ivec2 size {1920, 1080};
-		    auto driver = std::make_unique<we::Render::Drivers::CFboOpenGLDriver>(
-		        ctx, app, nullptr, nullptr, size
-		    );
+		    glm::ivec2 size {ctx.settings.render.window.geometry.z, ctx.settings.render.window.geometry.w};
+		    if (size.x <= 0 || size.y <= 0) size = {1920, 1080};
+		    auto driver =
+		        std::make_unique<we::Render::Drivers::CFboOpenGLDriver>(ctx, app, nullptr, nullptr, size);
 		    pendingDriverSlot() = driver.get();
 		    return driver;
 	    }
 	);
 }
-} // namespace
 
-// Owns the WE app + our driver. Everything here runs on the scene-graph render
-// thread with Qt's GL context current (bracket WE's GL with the window's
-// beginExternalCommands()/endExternalCommands()).
+// Builds + owns the WE app for one project. Lives on the render thread; all its
+// GL runs inside QQuickFramebufferObject::Renderer::render() where Qt has made
+// its context current, bound the target FBO, and bracketed the call.
 class WallpaperEngineContext {
 public:
-	WallpaperEngineContext(QQuickWindow* window, const QString& projectPath, int width, int height)
-	    : window(window) {
+	WallpaperEngineContext(const QString& projectPath, int width, int height) {
 		ensureDriverRegistered();
-
-		// Synthesize argv so WE's normal CLI parser fills ApplicationContext
-		// (mode=EXPLICIT_WINDOW + geometry + project). --assets-dir is required
-		// when embedded: WE auto-detects its base assets relative to the
-		// linux-wallpaperengine binary, which doesn't exist here (binary is
-		// quickshell), so the mount fails without it.
-		// TODO(embed): expose assetsDir as a QML property instead of the default.
 		const std::string geo =
 		    "0x0x" + std::to_string(width) + "x" + std::to_string(height);
 		this->project = projectPath.toStdString();
-		const std::string assetsDir =
-		    std::string(qgetenv("HOME").constData())
+		this->assets = std::string(qgetenv("HOME").constData())
 		    + "/.local/share/Steam/steamapps/common/wallpaper_engine/assets";
 		std::vector<char*> argv {
 		    const_cast<char*>("linux-wallpaperengine"),
 		    const_cast<char*>("--window"),
 		    const_cast<char*>(geo.c_str()),
-		    const_cast<char*>("--assets-dir"),
-		    const_cast<char*>(assetsDir.c_str()),
 		    const_cast<char*>("--silent"),
+		    const_cast<char*>("--assets-dir"),
+		    const_cast<char*>(this->assets.c_str()),
 		    const_cast<char*>(this->project.c_str()),
 		};
-
 		try {
-			this->window->beginExternalCommands();
 			this->appContext = std::make_unique<we::Application::ApplicationContext>(
 			    static_cast<int>(argv.size()), argv.data()
 			);
-			// The ctor only stores argc/argv; this does the actual parse
-			// (mode, geometry, project, assets). Missing this was why nothing
-			// was configured.
 			this->appContext->loadSettingsFromArgv();
 			this->app = std::make_unique<we::Application::WallpaperApplication>(*this->appContext);
-			this->app->setup(); // creates our driver (factory) + loads the wallpaper
+			this->app->setup();
 			this->driver = pendingDriverSlot();
 			pendingDriverSlot() = nullptr;
-			if (this->driver) this->app->setDestinationFramebuffer(this->driver->fbo());
-			this->window->endExternalCommands();
 			this->ready = this->driver != nullptr;
 		} catch (const std::exception& e) {
-			this->window->endExternalCommands();
 			qWarning("WallpaperEngineSurface: failed to start Wallpaper Engine: %s", e.what());
 			this->ready = false;
 		}
 	}
 
 	~WallpaperEngineContext() {
-		if (!this->app) return;
-		this->window->beginExternalCommands();
-		this->app->cleanup();
-		this->app.reset();
-		this->appContext.reset();
-		this->window->endExternalCommands();
+		if (this->app) this->app->cleanup();
 	}
 
-	void renderFrame() {
+	// Render one frame into `targetFbo` (Qt's). Context is current + bracketed by
+	// Qt (QQuickFramebufferObject).
+	void renderInto(unsigned int targetFbo) {
 		if (!this->ready) return;
-		this->window->beginExternalCommands();
-		// dispatchEventQueue() clears + runs app.update(viewport) into our FBO,
-		// without swap/poll/sleep. WE composites into the destination FBO.
-		this->driver->dispatchEventQueue();
-		this->window->endExternalCommands();
-	}
-
-	[[nodiscard]] unsigned int textureId() const {
-		return this->driver ? this->driver->texture() : 0;
-	}
-
-	[[nodiscard]] QSize size() const {
-		if (!this->driver) return {};
-		auto s = this->driver->getFramebufferSize();
-		return {s.x, s.y};
+		this->app->setDestinationFramebuffer(targetFbo);
+		for (const auto& [screen, viewport] : this->app->getOutput().getViewports()) {
+			this->app->update(viewport);
+		}
 	}
 
 	[[nodiscard]] bool valid() const { return this->ready; }
 
 private:
-	QQuickWindow* window;
 	std::string project;
+	std::string assets;
 	std::unique_ptr<we::Application::ApplicationContext> appContext;
 	std::unique_ptr<we::Application::WallpaperApplication> app;
 	we::Render::Drivers::CFboOpenGLDriver* driver = nullptr;
 	bool ready = false;
 };
 
-WallpaperEngineSurface::WallpaperEngineSurface(QQuickItem* parent): QQuickItem(parent) {
-	this->setFlag(QQuickItem::ItemHasContents, true);
+// QQuickFramebufferObject renderer: Qt owns the FBO + context + state boundary.
+class WeRenderer: public QQuickFramebufferObject::Renderer {
+public:
+	QOpenGLFramebufferObject* createFramebufferObject(const QSize& size) override {
+		// WE needs a depth/stencil buffer for its scene rendering.
+		QOpenGLFramebufferObjectFormat fmt;
+		fmt.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+		return new QOpenGLFramebufferObject(size, fmt);
+	}
+
+	// synchronize() runs on the render thread with the GUI thread blocked and the
+	// GL context current - Qt's designated place for GL resource setup. Build the
+	// heavy WE app here (not in render()).
+	void synchronize(QQuickFramebufferObject* item) override {
+		auto* surface = static_cast<WallpaperEngineSurface*>(item);
+		this->wantedPath = surface->projectPath();
+		this->live = surface->live();
+		const int w = static_cast<int>(surface->width());
+		const int h = static_cast<int>(surface->height());
+		if (this->wantedPath != this->loadedPath) this->context.reset();
+		if (!this->context && !this->wantedPath.isEmpty() && w > 0 && h > 0) {
+			this->loadedPath = this->wantedPath;
+			this->context = std::make_unique<WallpaperEngineContext>(this->wantedPath, w, h);
+			if (!this->context->valid()) this->context.reset();
+		}
+	}
+
+	void render() override {
+		auto* fbo = this->framebufferObject();
+		if (this->context && fbo) this->context->renderInto(fbo->handle());
+		if (this->live) this->update(); // schedule next frame
+	}
+
+private:
+	std::unique_ptr<WallpaperEngineContext> context;
+	QString wantedPath;
+	QString loadedPath;
+	bool live = true;
+};
+} // namespace
+
+WallpaperEngineSurface::WallpaperEngineSurface(QQuickItem* parent): QQuickFramebufferObject(parent) {
+	this->setMirrorVertically(true); // WE renders bottom-up
 }
 
-WallpaperEngineSurface::~WallpaperEngineSurface() { this->destroyContext(); }
-
-void WallpaperEngineSurface::componentComplete() {
-	this->QQuickItem::componentComplete();
-	this->completed = true;
-	if (!this->mProjectPath.isEmpty()) this->update();
+QQuickFramebufferObject::Renderer* WallpaperEngineSurface::createRenderer() const {
+	return new WeRenderer();
 }
 
 void WallpaperEngineSurface::setProjectPath(const QString& projectPath) {
 	if (projectPath == this->mProjectPath) return;
 	this->mProjectPath = projectPath;
 	emit this->projectPathChanged();
-	if (this->completed) this->reload();
+	this->update();
 }
 
 void WallpaperEngineSurface::setLive(bool live) {
 	if (live == this->mLive) return;
 	this->mLive = live;
 	emit this->liveChanged();
-	if (live) this->update();
+	this->update();
 }
 
 void WallpaperEngineSurface::setFps(int fps) {
 	if (fps == this->mFps) return;
 	this->mFps = fps;
 	emit this->fpsChanged();
-}
-
-void WallpaperEngineSurface::createContext() {
-	if (this->context || !this->window() || this->mProjectPath.isEmpty()) return;
-	const auto w = static_cast<int>(this->width() > 0 ? this->width() : 1920);
-	const auto h = static_cast<int>(this->height() > 0 ? this->height() : 1080);
-	this->context = new WallpaperEngineContext(this->window(), this->mProjectPath, w, h);
-	if (!this->context->valid()) {
-		this->destroyContext();
-		emit this->stopped();
-		return;
-	}
-	QObject::connect(
-	    this->window(),
-	    &QQuickWindow::beforeRendering,
-	    this,
-	    &WallpaperEngineSurface::onBeforeRendering,
-	    Qt::DirectConnection
-	);
-}
-
-void WallpaperEngineSurface::destroyContext() {
-	if (this->window()) this->window()->disconnect(this);
-	delete this->context;
-	this->context = nullptr;
-	this->bHasContent = false;
-}
-
-void WallpaperEngineSurface::reload() {
-	// A project change rebuilds the context (WE ties the loaded wallpaper to the
-	// app instance). Cheap enough for the selector's occasional switches.
-	this->destroyContext();
-	this->update();
-}
-
-void WallpaperEngineSurface::onBeforeRendering() {
-	if (!this->context || !this->context->valid()) return;
-	if (!this->mLive && this->bHasContent.value()) return;
-
-	this->context->renderFrame();
-	const auto size = this->context->size();
-	if (size.isValid() && size != this->bSourceSize.value()) this->bSourceSize = size;
-	if (!this->bHasContent.value()) this->bHasContent = true;
-
-	if (this->mLive) this->update();
-}
-
-QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* /*unused*/) {
-	if (!this->context) this->createContext();
-
-	if (!this->context || !this->bHasContent.value()) {
-		delete oldNode;
-		return nullptr;
-	}
-
-	auto* node = static_cast<QSGSimpleTextureNode*>(oldNode);
-	if (!node) node = new QSGSimpleTextureNode();
-
-	auto* texture = QNativeInterface::QSGOpenGLTexture::fromNative(
-	    this->context->textureId(),
-	    this->window(),
-	    this->bSourceSize.value()
-	);
-
-	node->setOwnsTexture(true);
-	node->setTexture(texture);
-	node->setRect(this->boundingRect());
-	node->setFiltering(QSGTexture::Linear);
-	// WE renders bottom-up (renderVFlip): flip the texture vertically.
-	node->setTextureCoordinatesTransform(QSGSimpleTextureNode::MirrorVertically);
-	return node;
 }
 
 } // namespace qs::wallpaperengine
