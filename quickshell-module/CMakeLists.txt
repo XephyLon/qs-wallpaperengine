@@ -32,11 +32,27 @@ qt_add_library(quickshell-wallpaperengine STATIC
 	"${WE_DRV}/Output/CFboOutputViewport.cpp"
 )
 
-# WE headers pull in glm + other vendored deps under the WE tree. Add the source
-# root; extend with WE's other include dirs (glm, etc.) at build time as the
-# transitive includes surface.
+# WE headers pull in a large vendored-dep include set (glslang, SPIRV-Cross,
+# json, kissfft, stb, quickjs, cef, generated protocols...). Rather than hardcode
+# WE's build layout, harvest the exact -I/-isystem dirs from WE's
+# compile_commands.json (the WE tree must be cmake-configured; bootstrap does it).
+if (NOT DEFINED WALLPAPERENGINE_BUILD)
+	set(WALLPAPERENGINE_BUILD "${WALLPAPERENGINE_SRC}/../build"
+		CACHE PATH "linux-wallpaperengine build dir (has compile_commands.json)")
+endif()
+
+set(_we_incs "")
+if (EXISTS "${WALLPAPERENGINE_BUILD}/compile_commands.json")
+	execute_process(
+		COMMAND python3 -c "import json,sys,shlex\ndb=json.load(open(sys.argv[1]))\ne=next(x for x in db if x['file'].endswith('CFboOpenGLDriver.cpp'))\nt=shlex.split(e['command']);o=[];i=0\nwhile i<len(t):\n    if t[i]=='-isystem': o.append(t[i+1]); i+=2; continue\n    if t[i].startswith('-I'): o.append(t[i][2:] or t[i+1]); i+=1; continue\n    i+=1\nprint(';'.join(o))" "${WALLPAPERENGINE_BUILD}/compile_commands.json"
+		OUTPUT_VARIABLE _we_incs
+		OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+endif()
+
 target_include_directories(quickshell-wallpaperengine PRIVATE
 	"${WALLPAPERENGINE_SRC}"
+	${_we_incs}
 )
 
 target_link_libraries(quickshell-wallpaperengine PRIVATE

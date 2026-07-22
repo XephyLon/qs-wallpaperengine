@@ -1,3 +1,7 @@
+// glew must be included before any header that pulls in GL/gl.h (Qt Quick's GL
+// headers do). WE also uses glew, so include it first for the whole TU.
+#include <GL/glew.h>
+
 #include "wallpaperenginesurface.hpp"
 
 #include <qquickitem.h>
