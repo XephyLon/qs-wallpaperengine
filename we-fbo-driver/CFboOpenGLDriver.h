@@ -2,6 +2,7 @@
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Input/NullMouseInput.h"
 #include "WallpaperEngine/Render/Drivers/Output/CFboWindowOutput.h"
 #include "WallpaperEngine/Render/Drivers/VideoDriver.h"
 #include <glm/vec2.hpp>
@@ -46,9 +47,7 @@ public:
 
 private:
 	ApplicationContext& m_context;
-	// TODO(embed): a no-op mouse input satisfying VideoDriver's ctor. GLFW uses
-	// GLFWMouseInput(driver); a headless FBO needs a null MouseInput - check
-	// Input/MouseInput.h for a usable concrete/base or add a NullMouseInput.
+	Input::NullMouseInput m_mouseInput; // headless: no pointer
 	Output::CFboWindowOutput* m_output = nullptr;
 	void* m_shareDisplay = nullptr;
 	void* m_shareContext = nullptr;

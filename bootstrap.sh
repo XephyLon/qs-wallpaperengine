@@ -39,13 +39,30 @@ cp "$HERE/we-fbo-driver/CFboWindowOutput.h"   "$WE_DRV/Output/"
 cp "$HERE/we-fbo-driver/CFboWindowOutput.cpp" "$WE_DRV/Output/"
 cp "$HERE/we-fbo-driver/CFboOutputViewport.h" "$WE_DRV/Output/"
 cp "$HERE/we-fbo-driver/CFboOutputViewport.cpp" "$WE_DRV/Output/"
+cp "$HERE/we-fbo-driver/NullMouseInput.h" "$WE_SRC/src/WallpaperEngine/Input/"
+
+# Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
+WE_CMAKE="$WE_SRC/CMakeLists.txt"
+if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then
+	python3 - "$WE_CMAKE" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+anchor = "    src/WallpaperEngine/Render/Drivers/GLFWOpenGLDriver.cpp\n"
+add = (
+    "    src/WallpaperEngine/Render/Drivers/Output/CFboWindowOutput.cpp\n"
+    "    src/WallpaperEngine/Render/Drivers/Output/CFboWindowOutput.h\n"
+    "    src/WallpaperEngine/Render/Drivers/Output/CFboOutputViewport.cpp\n"
+    "    src/WallpaperEngine/Render/Drivers/Output/CFboOutputViewport.h\n"
+    "    src/WallpaperEngine/Render/Drivers/CFboOpenGLDriver.h\n"
+    "    src/WallpaperEngine/Render/Drivers/CFboOpenGLDriver.cpp\n"
+)
+open(p, 'w').write(s.replace(anchor, anchor + add, 1))
+PY
+fi
 cat <<'EOF'
-  MANUAL (once): in linux-wallpaperengine
-    - add the four CFbo*.cpp to the driver sources in src/CMakeLists.txt
-    - resolve the VideoDriver ctor mouse-input arg (null MouseInput) and the
-      EGL shared-context creation in CFboOpenGLDriver (see we-fbo-driver/README.md)
-    - ensure the build produces liblinux-wallpaperengine-lib.so + installs the
-      WallpaperEngine/Render/** headers (needed by the Quickshell module)
+  DONE automatically: CFbo* copied + registered in CMakeLists, NullMouseInput added.
+  Remaining in CFboOpenGLDriver.cpp: fill EGL shared-context creation + GL bodies
+  (see we-fbo-driver/README.md). Then build the lib.
 EOF
 # cmake -S "$WE_SRC" -B "$WE_SRC/build" -DCMAKE_BUILD_TYPE=Release
 # cmake --build "$WE_SRC/build" -j

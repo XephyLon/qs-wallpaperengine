@@ -4,9 +4,9 @@
 
 namespace WallpaperEngine::Render::Drivers {
 
-// NOTE: VideoDriver's ctor is VideoDriver(WallpaperApplication&, Input::MouseInput&).
-// Passing the mouse input requires a concrete instance (see header TODO); shown
-// here as `nullMouseInput` to be resolved against Input/MouseInput.h.
+// VideoDriver's ctor stores the MouseInput& (via InputContext) without calling
+// it, so passing our not-yet-constructed member is safe - the same pattern
+// GLFWOpenGLDriver uses with its m_mouseInput.
 CFboOpenGLDriver::CFboOpenGLDriver(
     ApplicationContext& context,
     WallpaperApplication& app,
@@ -14,7 +14,7 @@ CFboOpenGLDriver::CFboOpenGLDriver(
     void* shareContext,
     glm::ivec2 size
 )
-    : VideoDriver(app, /*TODO nullMouseInput*/ *static_cast<Input::MouseInput*>(nullptr))
+    : VideoDriver(app, m_mouseInput)
     , m_context(context)
     , m_shareDisplay(shareDisplay)
     , m_shareContext(shareContext) {
