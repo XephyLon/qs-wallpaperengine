@@ -1,0 +1,235 @@
+// glew before any Qt/GL header.
+#include <GL/glew.h>
+
+#include "wethread.hpp"
+
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+
+#include <chrono>
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <glm/vec2.hpp>
+
+#include <WallpaperEngine/Application/ApplicationContext.h>
+#include <WallpaperEngine/Application/WallpaperApplication.h>
+#include <WallpaperEngine/Render/Drivers/CFboOpenGLDriver.h>
+#include <WallpaperEngine/Render/Drivers/VideoFactories.h>
+
+namespace qs::wallpaperengine {
+
+namespace {
+namespace we = WallpaperEngine;
+
+we::Render::Drivers::CFboOpenGLDriver*& pendingDriverSlot() {
+	static thread_local we::Render::Drivers::CFboOpenGLDriver* slot = nullptr;
+	return slot;
+}
+
+void ensureDriverRegistered() {
+	static thread_local bool registered = false;
+	if (registered) return;
+	registered = true;
+	sVideoFactories.registerDriver(
+	    we::Application::ApplicationContext::EXPLICIT_WINDOW,
+	    DEFAULT_WINDOW_NAME,
+	    [](we::Application::ApplicationContext& ctx, we::Application::WallpaperApplication& app)
+	        -> std::unique_ptr<we::Render::Drivers::VideoDriver> {
+		    glm::ivec2 size {ctx.settings.render.window.geometry.z, ctx.settings.render.window.geometry.w};
+		    if (size.x <= 0 || size.y <= 0) size = {1920, 1080};
+		    auto driver =
+		        std::make_unique<we::Render::Drivers::CFboOpenGLDriver>(ctx, app, nullptr, nullptr, size);
+		    pendingDriverSlot() = driver.get();
+		    return driver;
+	    }
+	);
+}
+
+// One color texture + FBO (+ depth/stencil) that WE composites into.
+struct RenderTarget {
+	GLuint texture = 0;
+	GLuint fbo = 0;
+	GLuint depthStencil = 0;
+
+	void create(int w, int h) {
+		glGenTextures(1, &this->texture);
+		glBindTexture(GL_TEXTURE_2D, this->texture);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+		glGenRenderbuffers(1, &this->depthStencil);
+		glBindRenderbuffer(GL_RENDERBUFFER, this->depthStencil);
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+
+		glGenFramebuffers(1, &this->fbo);
+		glBindFramebuffer(GL_FRAMEBUFFER, this->fbo);
+		glFramebufferTexture2D(
+		    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, this->texture, 0
+		);
+		glFramebufferRenderbuffer(
+		    GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, this->depthStencil
+		);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+};
+
+} // namespace
+
+WeThread::WeThread(
+    void* display,
+    void* sharedContext,
+    std::string projectPath,
+    std::string assetsDir,
+    int width,
+    int height
+)
+    : mDisplay(display)
+    , mContext(sharedContext)
+    , mProjectPath(std::move(projectPath))
+    , mAssetsDir(std::move(assetsDir))
+    , mWidth(width)
+    , mHeight(height) {
+	this->mThread = std::thread([this] { this->run(); });
+}
+
+WeThread::~WeThread() {
+	this->mStop = true;
+	if (this->mThread.joinable()) this->mThread.join();
+}
+
+unsigned int WeThread::acquireTexture() {
+	if (!this->mReady) return 0;
+	GLuint tex;
+	GLsync sync;
+	{
+		std::lock_guard lock(this->mMutex);
+		tex = this->mFrontTexture;
+		sync = static_cast<GLsync>(this->mFrontFence);
+	}
+	// Server-side wait: Qt's context won't sample until WE's frame is complete.
+	// Does not block the CPU.
+	if (sync) glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
+	return tex;
+}
+
+void WeThread::run() {
+	auto dpy = static_cast<EGLDisplay>(this->mDisplay);
+	auto ctx = static_cast<EGLContext>(this->mContext);
+
+	// ctx is a Qt-built share context (matches Qt's config/robustness flags).
+	// Make it current surfacelessly - we only render to FBOs, no window surface.
+	eglBindAPI(EGL_OPENGL_API);
+	if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
+		std::fprintf(stderr, "WeThread: eglMakeCurrent failed: 0x%x\n", eglGetError());
+		return;
+	}
+
+	glewExperimental = GL_TRUE;
+	// GLEW_ERROR_NO_GLX_DISPLAY is expected under Wayland/EGL (no GLX) and is
+	// non-fatal - core GL entry points still load. Only a hard failure aborts.
+	if (GLenum err = glewInit(); err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
+		std::fprintf(stderr, "WeThread: glewInit failed: %s\n", glewGetErrorString(err));
+		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		return;
+	}
+	if (glGenFramebuffers == nullptr) {
+		std::fprintf(stderr, "WeThread: core GL not loaded after glewInit\n");
+		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		return;
+	}
+
+	RenderTarget targets[2];
+	targets[0].create(this->mWidth, this->mHeight);
+	targets[1].create(this->mWidth, this->mHeight);
+	int back = 0;
+
+	// Build the WE app on THIS thread/context.
+	ensureDriverRegistered();
+	const std::string geo = "0x0x" + std::to_string(this->mWidth) + "x" + std::to_string(this->mHeight);
+	std::vector<char*> argv {
+	    const_cast<char*>("linux-wallpaperengine"),
+	    const_cast<char*>("--window"),
+	    const_cast<char*>(geo.c_str()),
+	    const_cast<char*>("--silent"),
+	    const_cast<char*>("--assets-dir"),
+	    const_cast<char*>(this->mAssetsDir.c_str()),
+	    const_cast<char*>(this->mProjectPath.c_str()),
+	};
+
+	std::unique_ptr<we::Application::ApplicationContext> appContext;
+	std::unique_ptr<we::Application::WallpaperApplication> app;
+	try {
+		appContext = std::make_unique<we::Application::ApplicationContext>(
+		    static_cast<int>(argv.size()), argv.data()
+		);
+		appContext->loadSettingsFromArgv();
+		app = std::make_unique<we::Application::WallpaperApplication>(*appContext);
+		app->setup();
+	} catch (const std::exception& e) {
+		std::fprintf(stderr, "WeThread: WE start failed: %s\n", e.what());
+		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		return;
+	}
+	if (pendingDriverSlot() == nullptr) {
+		std::fprintf(stderr, "WeThread: driver never registered\n");
+		app->cleanup();
+		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		return;
+	}
+	pendingDriverSlot() = nullptr;
+
+	using clock = std::chrono::steady_clock;
+	const auto frameTime = std::chrono::milliseconds(1000 / 60);
+
+	while (!this->mStop) {
+		auto start = clock::now();
+
+		auto& tgt = targets[back];
+		app->setDestinationFramebuffer(tgt.fbo);
+		for (const auto& [screen, viewport] : app->getOutput().getViewports()) {
+			app->update(viewport);
+		}
+		glFlush();
+		GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+
+		GLsync oldSync = nullptr;
+		{
+			std::lock_guard lock(this->mMutex);
+			oldSync = static_cast<GLsync>(this->mFrontFence);
+			this->mFrontTexture = tgt.texture;
+			this->mFrontFence = sync;
+		}
+		if (oldSync) glDeleteSync(oldSync);
+		if (!this->mReady) std::fprintf(stderr, "WeThread: first frame published tex=%u\n", tgt.texture);
+		this->mReady = true;
+		back ^= 1;
+
+		auto elapsed = clock::now() - start;
+		if (elapsed < frameTime) std::this_thread::sleep_for(frameTime - elapsed);
+	}
+
+	app->cleanup();
+	{
+		std::lock_guard lock(this->mMutex);
+		if (this->mFrontFence) glDeleteSync(static_cast<GLsync>(this->mFrontFence));
+		this->mFrontFence = nullptr;
+		this->mFrontTexture = 0;
+	}
+	glDeleteFramebuffers(1, &targets[0].fbo);
+	glDeleteFramebuffers(1, &targets[1].fbo);
+	glDeleteTextures(1, &targets[0].texture);
+	glDeleteTextures(1, &targets[1].texture);
+	glDeleteRenderbuffers(1, &targets[0].depthStencil);
+	glDeleteRenderbuffers(1, &targets[1].depthStencil);
+	// ctx is owned by the surface's QOpenGLContext; just release it from this
+	// thread, don't destroy it.
+	eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+}
+
+} // namespace qs::wallpaperengine

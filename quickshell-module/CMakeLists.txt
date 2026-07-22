@@ -35,6 +35,7 @@ endif()
 
 qt_add_library(quickshell-wallpaperengine STATIC
 	wallpaperenginesurface.cpp
+	wethread.cpp
 )
 
 # WE headers pull in a large vendored-dep include set (glslang, SPIRV-Cross,

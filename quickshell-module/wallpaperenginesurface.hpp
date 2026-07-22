@@ -1,18 +1,26 @@
 #pragma once
 
+#include <memory>
+
+#include <qopenglcontext.h>
 #include <qobject.h>
 #include <qqmlintegration.h>
-#include <qquickframebufferobject.h>
+#include <qquickitem.h>
+#include <qtimer.h>
 #include <qtmetamacros.h>
 
 namespace qs::wallpaperengine {
 
+class WeThread;
+
 ///! Renders a live Wallpaper Engine wallpaper into the scene graph.
-/// WallpaperEngineSurface drives an embedded linux-wallpaperengine renderer into
-/// a Qt-managed FBO (via QQuickFramebufferObject, so Qt owns the FBO/context and
-/// the GL-state boundary) and displays that texture. Widgets can then frost
-/// against it, the lock can blur it, transitions can run on it - all in-shell.
-class WallpaperEngineSurface: public QQuickFramebufferObject {
+/// WallpaperEngineSurface runs an embedded linux-wallpaperengine renderer on its
+/// own thread + EGL context (sharing GL objects with Qt's) and displays the
+/// resulting texture as a scene-graph node. Keeping all of WE's GL/EGL off Qt's
+/// threads avoids corrupting Qt's Wayland/EGL dispatch (fatal on NVIDIA).
+/// Widgets can then frost against it, the lock can blur it, transitions can run
+/// on it - all in-shell.
+class WallpaperEngineSurface: public QQuickItem {
 	Q_OBJECT;
 	QML_ELEMENT;
 	// clang-format off
@@ -26,8 +34,8 @@ class WallpaperEngineSurface: public QQuickFramebufferObject {
 
 public:
 	explicit WallpaperEngineSurface(QQuickItem* parent = nullptr);
-
-	[[nodiscard]] Renderer* createRenderer() const override;
+	~WallpaperEngineSurface() override;
+	Q_DISABLE_COPY_MOVE(WallpaperEngineSurface);
 
 	[[nodiscard]] QString projectPath() const { return this->mProjectPath; }
 	void setProjectPath(const QString& projectPath);
@@ -43,10 +51,22 @@ signals:
 	void liveChanged();
 	void fpsChanged();
 
+protected:
+	QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
+
 private:
 	QString mProjectPath;
 	bool mLive = true;
 	int mFps = 60;
+
+	// Declared before mThread so it outlives it: the thread uses this context's
+	// native EGLContext and must be joined before the context is destroyed.
+	std::unique_ptr<QOpenGLContext> mShareContext;
+	std::unique_ptr<WeThread> mThread;
+	QString mLoadedPath;
+	QTimer mRepaint; // GUI-thread repaint driver at mFps
+
+	void updateRepaintTimer();
 };
 
 } // namespace qs::wallpaperengine
