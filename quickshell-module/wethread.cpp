@@ -184,13 +184,14 @@ void WeThread::run() {
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
-	if (pendingDriverSlot() == nullptr) {
+	auto* driver = pendingDriverSlot();
+	pendingDriverSlot() = nullptr;
+	if (driver == nullptr) {
 		std::fprintf(stderr, "WeThread: driver never registered\n");
 		app->cleanup();
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
-	pendingDriverSlot() = nullptr;
 
 	using clock = std::chrono::steady_clock;
 	const auto frameTime = std::chrono::milliseconds(1000 / 60);
@@ -199,11 +200,21 @@ void WeThread::run() {
 		auto start = clock::now();
 
 		auto& tgt = targets[back];
-		app->setDestinationFramebuffer(tgt.fbo);
-		for (const auto& [screen, viewport] : app->getOutput().getViewports()) {
-			app->update(viewport);
-		}
-		glFlush();
+		// dispatchEventQueue() is WE's real per-frame render: it binds the output
+		// FBO, clears, runs app.update() for each viewport, calls updateRender(),
+		// AND increments the driver frame counter. That last part is essential - WE
+		// skips re-rendering the scene unless the frame counter advances.
+		// Scenes render into the driver's OWN output FBO (driver->fbo()), not into
+		// setDestinationFramebuffer, so blit that output into our double-buffered
+		// target - Qt then samples a stable, complete frame.
+		driver->dispatchEventQueue();
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, driver->fbo());
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
+		glBlitFramebuffer(
+		    0, 0, this->mWidth, this->mHeight, 0, 0, this->mWidth, this->mHeight,
+		    GL_COLOR_BUFFER_BIT, GL_LINEAR
+		);
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
 		GLsync oldSync = nullptr;
@@ -214,6 +225,29 @@ void WeThread::run() {
 			this->mFrontFence = sync;
 		}
 		if (oldSync) glDeleteSync(oldSync);
+		// DIAG: sample a few pixels across the FBO at several frame counts, to see
+		// whether WE ever draws content (warmup) vs never.
+		static int frameNo = 0;
+		++frameNo;
+		if (frameNo == 1 || frameNo == 30 || frameNo == 120 || frameNo == 240) {
+			glBindFramebuffer(GL_FRAMEBUFFER, tgt.fbo);
+			unsigned char c[4] = {0}, q[4] = {0};
+			glReadPixels(this->mWidth / 2, this->mHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
+			glReadPixels(this->mWidth / 4, this->mHeight / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, q);
+			GLenum fbs = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+			GLenum err = glGetError();
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+			if (FILE* f = std::fopen("/tmp/we_diag.log", "a")) {
+				std::fprintf(
+				    f,
+				    "WeThread frame %d: tex=%u fbo=%u %dx%d center=%d,%d,%d,%d quarter=%d,%d,%d,%d "
+				    "fbstatus=0x%x glerr=0x%x\n",
+				    frameNo, tgt.texture, tgt.fbo, this->mWidth, this->mHeight, c[0], c[1], c[2], c[3],
+				    q[0], q[1], q[2], q[3], fbs, err
+				);
+				std::fclose(f);
+			}
+		}
 		this->mReady = true;
 		back ^= 1;
 

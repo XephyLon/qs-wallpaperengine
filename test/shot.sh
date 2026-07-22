@@ -3,10 +3,11 @@
 # (never the whole desktop), then kill.
 S=/home/xephy/dev/qs-wallpaperengine
 OUT="${1:-/tmp/we_shot.png}"
+QML="${2:-$S/test/one.qml}"
 pkill -9 -f "build2/src/quickshell" 2>/dev/null
 export HYPRLAND_INSTANCE_SIGNATURE=36b2e0cfe0c6094dbc47bd42a437431315bb3087_1784698003_1786281539
 export LD_LIBRARY_PATH="$S/build/linux-wallpaperengine/build/output:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine"
-"$S/build/quickshell/build2/src/quickshell" -p "$S/test/one.qml" >/tmp/we_run.txt 2>&1 &
+"$S/build/quickshell/build2/src/quickshell" -p "$QML" >/tmp/we_run.txt 2>&1 &
 QS=$!
 sleep 4
 # Find our window by title (FloatingWindow default title is the qml path / "quickshell").
