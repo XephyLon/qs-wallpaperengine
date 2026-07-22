@@ -6,6 +6,8 @@
 #include <qopenglframebufferobject.h>
 #include <qquickframebufferobject.h>
 
+#include <cstdio>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,10 +38,11 @@ void ensureDriverRegistered() {
 	        -> std::unique_ptr<we::Render::Drivers::VideoDriver> {
 		    glm::ivec2 size {ctx.settings.render.window.geometry.z, ctx.settings.render.window.geometry.w};
 		    if (size.x <= 0 || size.y <= 0) size = {1920, 1080};
+		    std::cout << "WE: CFbo factory ENTER size=" << size.x << "x" << size.y << std::endl;
 		    auto driver =
 		        std::make_unique<we::Render::Drivers::CFboOpenGLDriver>(ctx, app, nullptr, nullptr, size);
 		    pendingDriverSlot() = driver.get();
-		    qWarning("WE: CFbo factory called, driver=%p size=%dx%d", (void*) driver.get(), size.x, size.y);
+		    std::cout << "WE: CFbo factory DONE driver=" << (void*) driver.get() << std::endl;
 		    return driver;
 	    }
 	);
@@ -71,12 +74,15 @@ public:
 			    static_cast<int>(argv.size()), argv.data()
 			);
 			this->appContext->loadSettingsFromArgv();
+			std::cout << "WE: parsed; constructing app..." << std::endl;
 			this->app = std::make_unique<we::Application::WallpaperApplication>(*this->appContext);
+			std::cout << "WE: app constructed; setup..." << std::endl;
 			this->app->setup();
+			std::cout << "WE: setup returned" << std::endl;
 			this->driver = pendingDriverSlot();
 			pendingDriverSlot() = nullptr;
 			this->ready = this->driver != nullptr;
-			qWarning("WE: after setup, driver=%p ready=%d", (void*) this->driver, this->ready);
+			std::cout << "WE: after setup, driver=" << (void*) this->driver << " ready=" << this->ready << std::endl;
 		} catch (const std::exception& e) {
 			qWarning("WallpaperEngineSurface: failed to start Wallpaper Engine: %s", e.what());
 			this->ready = false;
