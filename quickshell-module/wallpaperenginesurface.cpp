@@ -94,7 +94,8 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		node = new QSGSimpleTextureNode();
 		node->setOwnsTexture(true);
 		node->setFiltering(QSGTexture::Linear);
-		node->setTextureCoordinatesTransform(QSGSimpleTextureNode::MirrorVertically);
+		// WE's scene FBO is already oriented for GL sampling; no extra vertical
+		// mirror (the driver-output path needed one, the scene-FBO path does not).
 	}
 
 	// Wrap WE's GL texture (valid in the shared context) as a scene-graph texture.

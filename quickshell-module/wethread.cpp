@@ -206,7 +206,11 @@ void WeThread::run() {
 		// Scenes land in that output FBO (driver->fbo()), not in
 		// setDestinationFramebuffer, so blit it into our double-buffered target.
 		app->render();
-		glBindFramebuffer(GL_READ_FRAMEBUFFER, driver->fbo());
+		// WE renders the scene into the wallpaper's OWN scene FBO; blit that (not
+		// the driver output) into our double-buffered target.
+		GLuint srcFb = app->getFirstWallpaperFramebuffer();
+		if (srcFb == 0) srcFb = driver->fbo();
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
 		glBlitFramebuffer(
 		    0, 0, this->mWidth, this->mHeight, 0, 0, this->mWidth, this->mHeight,
@@ -223,37 +227,6 @@ void WeThread::run() {
 			this->mFrontFence = sync;
 		}
 		if (oldSync) glDeleteSync(oldSync);
-		// DIAG: sample a few pixels across the FBO at several frame counts, to see
-		// whether WE ever draws content (warmup) vs never.
-		static int frameNo = 0;
-		++frameNo;
-		if (frameNo == 1 || frameNo == 30 || frameNo == 120 || frameNo == 240) {
-			glBindFramebuffer(GL_FRAMEBUFFER, tgt.fbo);
-			unsigned char c[4] = {0}, q[4] = {0};
-			glReadPixels(this->mWidth / 2, this->mHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
-			glReadPixels(this->mWidth / 4, this->mHeight / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, q);
-			// Also sample the wallpaper's OWN scene framebuffer (where WE renders
-			// the real frame) to compare against the driver output.
-			GLuint sceneFb = app->getFirstWallpaperFramebuffer();
-			unsigned char s0[4] = {0}, s1[4] = {0};
-			if (sceneFb) {
-				glBindFramebuffer(GL_FRAMEBUFFER, sceneFb);
-				glReadPixels(this->mWidth / 2, this->mHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, s0);
-				glReadPixels(this->mWidth / 3, this->mHeight / 3, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, s1);
-			}
-			GLenum err = glGetError();
-			glBindFramebuffer(GL_FRAMEBUFFER, 0);
-			if (FILE* f = std::fopen("/tmp/we_diag.log", "a")) {
-				std::fprintf(
-				    f,
-				    "WeThread frame %d: tgt(%u) c=%d,%d,%d,%d q=%d,%d,%d,%d | sceneFB=%u "
-				    "s0=%d,%d,%d,%d s1=%d,%d,%d,%d glerr=0x%x\n",
-				    frameNo, tgt.fbo, c[0], c[1], c[2], c[3], q[0], q[1], q[2], q[3], sceneFb, s0[0],
-				    s0[1], s0[2], s0[3], s1[0], s1[1], s1[2], s1[3], err
-				);
-				std::fclose(f);
-			}
-		}
 		this->mReady = true;
 		back ^= 1;
 

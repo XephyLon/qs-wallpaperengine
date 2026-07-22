@@ -12,8 +12,8 @@ CFboWindowOutput::CFboWindowOutput(ApplicationContext& context, VideoDriver& dri
 	this->m_fullHeight = size.y;
 	// Single viewport covering the whole FBO. Owned here; base's map is not the
 	// owner. The viewport reads &mFbo so it survives resizes.
-	this->m_viewports["fbo"] =
-	    new CFboOutputViewport({0, 0, size.x, size.y}, "fbo", &this->mFbo);
+	this->m_viewports["default"] =
+	    new CFboOutputViewport({0, 0, size.x, size.y}, "default", &this->mFbo);
 }
 
 CFboWindowOutput::~CFboWindowOutput() {
