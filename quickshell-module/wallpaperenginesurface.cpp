@@ -103,8 +103,14 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	}
 
 	// Wrap WE's GL texture (valid in the shared context) as a scene-graph texture.
+	// TextureIsOpaque: a wallpaper is the bottom layer - ignore WE's alpha so the
+	// desktop behind the window never shows through where a scene composites with
+	// alpha < 1.
 	auto* qtTex = QNativeInterface::QSGOpenGLTexture::fromNative(
-	    texId, this->window(), QSize(this->mThread->width(), this->mThread->height())
+	    texId,
+	    this->window(),
+	    QSize(this->mThread->width(), this->mThread->height()),
+	    QQuickWindow::TextureIsOpaque
 	);
 	node->setTexture(qtTex); // ownsTexture => deletes the previous wrapper
 	node->setRect(0, 0, w, h);
