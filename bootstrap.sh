@@ -13,7 +13,13 @@ mkdir -p "$BUILD"
 # Pinned to match the installed packages so the module ABI matches the running
 # shell. Bump together with the packages.
 QS_URL="https://git.outfoxxed.me/quickshell/quickshell"
-QS_COMMIT="7511545ee20664e3b8b8d3322c0ffe7567c56f7a"   # illogical-impulse-quickshell-git 0.1.0.r1 (0.2.1)
+# NOTE: bumped from 7511545 because that commit fails to build under cmake 4.4
+# ("No rule to make target dbus_objectmanager.cpp"); e649d247 builds clean.
+# Kept in sync with immaterial-impulse-quickshell-git's _commit. The WE module is
+# copied in additively (add_subdirectory), so the CMake side is unaffected by the
+# bump — but the module's C++ against e649d247's Quickshell API is UNVERIFIED;
+# run a full WE build to confirm before relying on it.
+QS_COMMIT="e649d247498512464457aefcd05b73038c4e65a1"   # was 7511545 (cmake-4.4 build break)
 WE_URL="https://github.com/Almamu/linux-wallpaperengine"
 WE_COMMIT="b016d7d1"                                    # linux-wallpaperengine-git r627.b016d7d1
 
