@@ -30,7 +30,10 @@ clone_at() { # url dir commit
 	local url="$1" dir="$2" commit="$3"
 	if [ ! -d "$dir/.git" ]; then git clone "$url" "$dir"; fi
 	git -C "$dir" fetch --all --tags
-	git -C "$dir" checkout --detach "$commit"
+	# -f: discard any local modifications (our idempotent patches leave the tree
+	# dirty; a plain checkout would fail and leave a half-reset/half-patched state
+	# across re-runs). Start every run from a pristine $commit, then re-patch.
+	git -C "$dir" checkout -f --detach "$commit"
 	git -C "$dir" submodule update --init --recursive
 }
 
@@ -74,10 +77,21 @@ if "// this->setupBrowser ();" not in cpp:
         1,
     )
 if "getFirstWallpaperFramebuffer" not in cpp:
-    anchor = ("GLuint WallpaperApplication::getDestinationFramebuffer () const "
-              "{ return this->m_destinationFramebuffer; }\n")
-    cpp = cpp.replace(anchor, anchor +
-        "\nGLuint WallpaperApplication::getFirstWallpaperFramebuffer () const {\n"
+    import re
+    # Insert right after getDestinationFramebuffer's definition (inside the
+    # WallpaperEngine::Application namespace, next to its siblings). Match the
+    # line with a regex tolerant of trailing whitespace: some WE revisions have a
+    # trailing space after the closing '}', which broke the old exact-string
+    # anchor -> .replace() silently no-op'd -> the .h got the declarations but the
+    # .cpp had no definitions -> undefined-reference link error. Fail loud if the
+    # anchor is genuinely gone rather than silently producing a broken build.
+    m = re.search(
+        r'^GLuint WallpaperApplication::getDestinationFramebuffer \(\) const \{[^\n]*\}[^\n]*$',
+        cpp, re.M)
+    if not m:
+        sys.exit("EMBED PATCH: getDestinationFramebuffer anchor not found in WallpaperApplication.cpp")
+    cpp = cpp[:m.end()] + (
+        "\n\nGLuint WallpaperApplication::getFirstWallpaperFramebuffer () const {\n"
         "    const auto& w = this->m_renderContext->getWallpapers ();\n"
         "    return w.empty () ? 0 : w.begin ()->second->getWallpaperFramebuffer ();\n"
         "}\n"
@@ -88,7 +102,8 @@ if "getFirstWallpaperFramebuffer" not in cpp:
         "int WallpaperApplication::getFirstWallpaperFramebufferHeight () const {\n"
         "    const auto& w = this->m_renderContext->getWallpapers ();\n"
         "    return w.empty () ? 0 : (int) w.begin ()->second->getWallpaperFramebufferHeight ();\n"
-        "}\n", 1)
+        "}"
+    ) + cpp[m.end():]
 open(cpp_p, "w").write(cpp)
 
 h = open(h_p).read()
