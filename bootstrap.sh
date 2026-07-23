@@ -148,6 +148,33 @@ PY
 sed -i 's/mpv_set_property_string (this->m_handle, "hwdec", "auto");/mpv_set_property_string (this->m_handle, "hwdec", "auto-safe");/' \
 	"$WE_SRC/src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp"
 
+# CScene::dispatchObjectType: guard particle systems with no material. Some
+# workshop scenes (e.g. 431960/1955123321 "2B") ship a particle object whose
+# material is null; CParticle's constructor dereferences particle.material->material
+# unconditionally, so a missing material is a hard SIGSEGV. Embedded, that crash
+# takes the whole Quickshell host down (not just the wallpaper). Skip the particle
+# instead. Idempotent (guarded by the marker string).
+python3 - "$WE_SRC/src/WallpaperEngine/Render/Wallpapers/CScene.cpp" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "Skipping particle system with no material" not in s:
+    anchor = "\trenderObject = new Objects::CParticle (*this, particleData);"
+    guard = (
+        "\t// EMBED PATCH: some scenes ship a particle object with no material (or an\n"
+        "\t// empty model wrapper). CParticle's constructor dereferences\n"
+        "\t// particle.material->material unconditionally, so a missing material is a\n"
+        "\t// hard SIGSEGV that takes the whole host process down. Skip it instead.\n"
+        "\tif (particleData.material == nullptr || particleData.material->material == nullptr) {\n"
+        "\t    sLog.error (\"Skipping particle system with no material: \", particleData.name);\n"
+        "\t    return nullptr;\n"
+        "\t}\n\n"
+    )
+    if anchor not in s:
+        sys.exit("EMBED PATCH: CParticle dispatch anchor not found in CScene.cpp")
+    s = s.replace(anchor, guard + anchor, 1)
+    open(p, "w").write(s)
+PY
+
 # Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
 WE_CMAKE="$WE_SRC/CMakeLists.txt"
 if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then
