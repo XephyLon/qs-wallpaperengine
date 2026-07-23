@@ -12,6 +12,7 @@
 #include <chrono>
 #include <clocale>
 #include <cstdio>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -108,7 +109,31 @@ WeThread::WeThread(
 
 WeThread::~WeThread() {
 	this->mStop = true;
-	if (this->mThread.joinable()) this->mThread.join();
+	if (!this->mThread.joinable()) return;
+
+	// A plain join() here can deadlock the caller. mStop only breaks the render
+	// loop AFTER app->setup() returns; a scene that hangs INSIDE setup() (a bad
+	// pkg, an infinite loop in WE) never observes mStop, so join() would block
+	// forever. This destructor runs on the GUI thread (aboutToQuit) or the render
+	// thread (a project switch), so a wedged WE thread would freeze the whole
+	// shell. Bound the join: hand the thread to a reaper and wait a few seconds;
+	// if WE still has not stopped, detach and let the host carry on (the wedged
+	// thread and its GL context leak, but the shell stays responsive). Normal
+	// shutdowns finish well under the timeout - the render loop sees mStop on its
+	// next frame - so this adds no latency to the common path.
+	auto done = std::make_shared<std::promise<void>>();
+	auto future = done->get_future();
+	std::thread reaper([t = std::move(this->mThread), done]() mutable {
+		t.join();
+		done->set_value();
+	});
+	if (future.wait_for(std::chrono::seconds(3)) == std::future_status::ready) {
+		reaper.join();
+	} else {
+		std::fprintf(stderr, "WeThread: render thread did not stop in time; detaching\n");
+		std::fflush(stderr);
+		reaper.detach();
+	}
 }
 
 unsigned int WeThread::acquireTexture() {
