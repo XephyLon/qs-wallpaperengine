@@ -71,11 +71,22 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	// context via Qt (so its config + robustness flags match Qt's - raw
 	// eglCreateContext sharing fails EGL_BAD_MATCH on NVIDIA), then hand its
 	// native EGLContext to the WE thread for a surfaceless makeCurrent.
-	if (!this->mThread || this->mLoadedPath != this->mProjectPath) {
+	//
+	// Rebuild not only on a project switch but whenever Qt's current GL context
+	// differs from the one we built against: Hyprland's fullscreen direct-scanout
+	// can make Qt destroy and recreate this window's scene-graph context, which
+	// orphans our shared EGLContext and leaves WE's texture invalid in the new
+	// context (the wallpaper "breaks" and stays broken). Rebuilding here - on the
+	// render thread, with the new context current - re-shares against it and
+	// recovers automatically.
+	auto* qtCtx = QOpenGLContext::currentContext();
+	if (!this->mThread || this->mLoadedPath != this->mProjectPath || this->mLoadedContext != qtCtx) {
+		if (this->mThread && this->mLoadedContext != qtCtx) {
+			qInfo("WallpaperEngineSurface: GL context changed; rebuilding WE thread");
+		}
 		this->mThread.reset();
 		this->mShareContext.reset();
 
-		auto* qtCtx = QOpenGLContext::currentContext();
 		auto share = std::make_unique<QOpenGLContext>();
 		share->setFormat(qtCtx->format());
 		share->setShareContext(qtCtx);
@@ -93,6 +104,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 
 		this->mShareContext = std::move(share);
 		this->mLoadedPath = this->mProjectPath;
+		this->mLoadedContext = qtCtx;
 		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
