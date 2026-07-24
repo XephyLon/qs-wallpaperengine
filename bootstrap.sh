@@ -232,6 +232,59 @@ int main(int argc, char** argv) {
 }
 CPP
 fi
+# Desktop-entry monitor: upstream watches the applications dirs AND every
+# parent up to / (so a missing applications dir's creation is noticed). But it
+# rescans ALL .desktop files on a change to ANY watched dir — including parents
+# like ~/.local/share, /usr/share and $HOME. Theme tools (kde-material-you's
+# plasma-apply-colorscheme / plasma-changeicons writing color-schemes/, konsole/
+# profiles) then trigger full rescans on every wallpaper switch; each rescan
+# rebuilds large QML arrays whose Qt 6.11 QV4 garbage collection pauses the GUI
+# thread for seconds (measured 2-8s per burst, recurring). Only rescan for
+# changes inside a real applications dir, or when a missing one appears.
+# Idempotent (guarded by the marker string).
+python3 - "$QS_SRC/src/core/desktopentrymonitor.cpp" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "must NOT trigger a rescan" not in s:
+    old = (
+        "void DesktopEntryMonitor::onDirectoryChanged(const QString& /*path*/) {\n"
+        "\tthis->debounceTimer.start();\n"
+        "}\n"
+    )
+    new = (
+        "void DesktopEntryMonitor::onDirectoryChanged(const QString& path) {\n"
+        "\t// EMBED PATCH: parent directories (up to /) are watched ONLY so the\n"
+        "\t// creation of a missing applications dir is noticed. A change reported\n"
+        "\t// for a parent (e.g. ~/.local/share when a color-scheme or any sibling\n"
+        "\t// file lands) must NOT trigger a rescan of every .desktop file: that\n"
+        "\t// rescan cascades into large QML array rebuilds whose garbage\n"
+        "\t// collection pauses the UI for seconds. Only rescan when the change is\n"
+        "\t// in an actual applications dir (or a subdir), or when a previously\n"
+        "\t// missing applications dir just appeared.\n"
+        "\tfor (const auto& desktopPath: DesktopEntryManager::desktopPaths()) {\n"
+        "\t\tif (path == desktopPath || path.startsWith(desktopPath + QChar(u'/'))) {\n"
+        "\t\t\tthis->debounceTimer.start();\n"
+        "\t\t\treturn;\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\n"
+        "\t// Parent changed: pick up newly-created applications dirs.\n"
+        "\tfor (const auto& desktopPath: DesktopEntryManager::desktopPaths()) {\n"
+        "\t\tif (!this->watcher.directories().contains(desktopPath) && QDir(desktopPath).exists()) {\n"
+        "\t\t\taddPathAndParents(this->watcher, desktopPath);\n"
+        "\t\t\tthis->scanAndWatch(desktopPath);\n"
+        "\t\t\tthis->debounceTimer.start();\n"
+        "\t\t\treturn;\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}\n"
+    )
+    if old not in s:
+        sys.exit("EMBED PATCH: onDirectoryChanged anchor not found in desktopentrymonitor.cpp")
+    s = s.replace(old, new, 1)
+    open(p, "w").write(s)
+PY
+
 # The module CMakeLists compiles the FBO driver from the WE tree and links the
 # installed WE lib; point it at the cloned WE source headers.
 export WALLPAPERENGINE_SRC="$WE_SRC/src"
