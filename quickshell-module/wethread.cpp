@@ -322,6 +322,15 @@ void WeThread::run() {
 		}
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+		// Flush so the fence is actually submitted to the GPU NOW. Without this
+		// the fence sits in this context's unflushed command queue; the consumer
+		// (Qt's render thread) glWaitSync()s on it cross-context and stalls until
+		// this thread's next implicit flush. Scenes flush constantly so it went
+		// unnoticed, but VIDEO wallpapers block on the CPU inside app->render()
+		// for frame pacing (mpv), so the fence stayed unflushed for a whole video
+		// period - throttling every shell window's render cycle (and with it the
+		// QML animation driver) to the video's frame rate.
+		glFlush();
 
 		GLsync oldSync = nullptr;
 		{
