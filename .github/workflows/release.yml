@@ -1,0 +1,81 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build/publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write   # gh release create
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Resolve tag
+        id: t
+        run: echo "tag=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_OUTPUT"
+
+      - name: Base tooling
+        run: |
+          pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
+            qt6-base qt6-declarative qt6-wayland github-cli
+          # unprivileged build user (makepkg/yay refuse to run as root)
+          useradd -m build && echo "build ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: yay
+        run: |
+          sudo -u build bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay-bin.git \
+            && cd yay-bin && makepkg -si --noconfirm'
+
+      - name: Runtime + build deps
+        run: |
+          # /opt/linux-wallpaperengine (runtime) + its makedepends, full build:
+          sudo -u build yay -S --noconfirm --needed linux-wallpaperengine-git
+          # Quickshell makedepends only (no package build): extract from PKGBUILD
+          sudo -u build bash -c 'cd /tmp && yay -G quickshell-git && cd quickshell-git \
+            && source PKGBUILD && sudo pacman -S --noconfirm --needed --asdeps \
+               "${makedepends[@]}" "${depends[@]}"'
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        id: build
+        run: |
+          chown -R build:build "$GITHUB_WORKSPACE"
+          eval "$(sudo -u build env REPO_ROOT="$GITHUB_WORKSPACE" bash scripts/build-we.sh)"
+          echo "qs_bin=$QS_BIN"       >> "$GITHUB_OUTPUT"
+          echo "we_lib_dir=$WE_LIB_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Package
+        run: |
+          mkdir -p out
+          WE_QT_VERSION="$(pacman -Q qt6-base | awk '{print $2}')" \
+          WE_COMMIT="${GITHUB_SHA}" WE_BUILT_AT="build-${{ steps.t.outputs.tag }}" \
+          bash scripts/package-we.sh \
+            --qs-bin "${{ steps.build.outputs.qs_bin }}" \
+            --lib-dir "${{ steps.build.outputs.we_lib_dir }}" \
+            --tag "${{ steps.t.outputs.tag }}" --out out
+
+      - name: Smoke test the packaged binary
+        run: |
+          d="$(mktemp -d)"
+          tar --use-compress-program=unzstd \
+            -xf out/qs-wallpaperengine-${{ steps.t.outputs.tag }}-x86_64.tar.zst -C "$d"
+          LD_LIBRARY_PATH="$d/lib:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine" \
+            "$d/bin/quickshell" --version
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.t.outputs.tag }}" \
+            out/qs-wallpaperengine-${{ steps.t.outputs.tag }}-x86_64.tar.zst \
+            out/manifest.json out/SHA256SUMS \
+            --title "${{ steps.t.outputs.tag }}" \
+            --notes "Prebuilt WE-capable Quickshell (x86_64). Installer verifies SHA256SUMS and falls back to a source build on any mismatch."
