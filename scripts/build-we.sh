@@ -22,15 +22,20 @@ print_paths(){ printf 'QS_BIN=%s\nWE_LIB_DIR=%s\n' "$QS_BIN" "$WE_LIB_DIR"; }
 
 if [[ "${1:-}" == "--print-paths" ]]; then print_paths; exit 0; fi
 
+# All build output (bootstrap + cmake + ninja) is routed to stderr so that
+# stdout carries ONLY the final `QS_BIN=`/`WE_LIB_DIR=` lines. Both consumers
+# capture stdout with `eval "$(... build-we.sh)"`; if the build noise leaked to
+# stdout it would get eval'd. stderr still shows live in the terminal / CI log.
+
 # --- 1. Clone+patch both upstreams (bootstrap.sh is idempotent) -------------
 cd "$REPO_ROOT"
-bash ./bootstrap.sh
+bash ./bootstrap.sh 1>&2
 
 export WALLPAPERENGINE_SRC="$WE_SRC/src"
 
 # --- 2. Build linux-wallpaperengine (the FBO-driver lib) --------------------
-cmake -S "$WE_SRC" -B "$WE_SRC/build" -DCMAKE_BUILD_TYPE=Release
-cmake --build "$WE_SRC/build" -j"$JOBS"
+cmake -S "$WE_SRC" -B "$WE_SRC/build" -DCMAKE_BUILD_TYPE=Release 1>&2
+cmake --build "$WE_SRC/build" -j"$JOBS" 1>&2
 
 # --- 3. Build the patched Quickshell into build2 (Ninja; see 4.wallpaper...) -
 rm -rf "$QS_SRC/build2"
@@ -38,8 +43,8 @@ cmake -GNinja -S "$QS_SRC" -B "$QS_SRC/build2" -DCMAKE_BUILD_TYPE=Release \
   -DWALLPAPERENGINE_SRC="$WE_SRC/src" -DWALLPAPERENGINE_BUILD="$WE_SRC/build" \
   -DSERVICE_MPRIS=ON -DSERVICE_NOTIFICATIONS=ON -DSERVICE_PAM=ON \
   -DSERVICE_PIPEWIRE=ON -DSERVICE_POLKIT=ON -DSERVICE_STATUS_NOTIFIER=ON \
-  -DSERVICE_UPOWER=ON -DBLUETOOTH=ON
-cmake --build "$QS_SRC/build2" -j"$JOBS"
+  -DSERVICE_UPOWER=ON -DBLUETOOTH=ON 1>&2
+cmake --build "$QS_SRC/build2" -j"$JOBS" 1>&2
 
 [[ -x "$QS_BIN" ]] || { echo "build-we.sh: $QS_BIN missing after build" >&2; exit 1; }
 print_paths
