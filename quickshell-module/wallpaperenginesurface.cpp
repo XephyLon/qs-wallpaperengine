@@ -108,7 +108,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
-		    this->mFps, this->mScaleMode.toStdString()
+		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled
 		);
 	}
 
@@ -187,6 +187,16 @@ void WallpaperEngineSurface::setScaleMode(const QString& scaleMode) {
 	this->mScaleMode = scaleMode;
 	emit this->scaleModeChanged();
 	// Scaling is a WE startup argument; rebuild the thread so it takes effect.
+	this->mLoadedPath.clear();
+	this->update();
+}
+
+void WallpaperEngineSurface::setAudioEnabled(bool audioEnabled) {
+	if (audioEnabled == this->mAudioEnabled) return;
+	this->mAudioEnabled = audioEnabled;
+	emit this->audioEnabledChanged();
+	// Audio existence is a WE load-time decision (--silent skips stream/volume
+	// setup entirely); rebuild the thread so the toggle takes effect.
 	this->mLoadedPath.clear();
 	this->update();
 }

@@ -29,7 +29,8 @@ public:
 	    int width,
 	    int height,
 	    int fps,
-	    std::string scaleMode
+	    std::string scaleMode,
+	    bool audioEnabled
 	);
 	~WeThread();
 
@@ -54,6 +55,7 @@ private:
 	std::string mScaleMode;
 	int mWidth;
 	int mHeight;
+	bool mAudioEnabled;
 
 	std::thread mThread;
 	std::atomic<bool> mStop {false};

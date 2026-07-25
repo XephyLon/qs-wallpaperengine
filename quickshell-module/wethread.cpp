@@ -94,7 +94,8 @@ WeThread::WeThread(
     int width,
     int height,
     int fps,
-    std::string scaleMode
+    std::string scaleMode,
+    bool audioEnabled
 )
     : mDisplay(display)
     , mContext(sharedContext)
@@ -103,6 +104,7 @@ WeThread::WeThread(
     , mScaleMode(std::move(scaleMode))
     , mWidth(width)
     , mHeight(height)
+    , mAudioEnabled(audioEnabled)
     , mFps(fps > 0 ? fps : 60) {
 	this->mThread = std::thread([this] { this->run(); });
 }
@@ -216,10 +218,14 @@ void WeThread::run() {
 	    const_cast<char*>("linux-wallpaperengine"),
 	    const_cast<char*>("--window"),
 	    const_cast<char*>(geo.c_str()),
-	    const_cast<char*>("--silent"),
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
 	};
+	// Audio is a load-time decision inside WE: with --silent, sound objects never
+	// create their SDL streams and video wallpapers get mpv volume 0 at creation,
+	// so it cannot be re-enabled at runtime - the surface rebuilds this thread to
+	// flip it.
+	if (!this->mAudioEnabled) argv.push_back(const_cast<char*>("--silent"));
 	// Pass the scaling mode: WE applies it for video wallpapers (which composite
 	// into the driver output, not a scene FBO). Scenes render into their own
 	// scene FBO at native projection and we scale those ourselves at blit time.

@@ -33,6 +33,10 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// Scaling mode: "fill" (crop to cover, default), "fit" (letterbox),
 	/// "stretch" (distort to fill), or "default" (native, centered).
 	Q_PROPERTY(QString scaleMode READ scaleMode WRITE setScaleMode NOTIFY scaleModeChanged);
+	/// Play the wallpaper's audio (scene sounds / video soundtrack). Default
+	/// false. Audio existence is decided when WE loads the project, so toggling
+	/// this reloads the wallpaper (brief black-out, like a scaleMode change).
+	Q_PROPERTY(bool audioEnabled READ audioEnabled WRITE setAudioEnabled NOTIFY audioEnabledChanged);
 	/// True once the current project has produced its first rendered frame.
 	/// Resets to false when projectPath changes. Lets QML start a wallpaper
 	/// transition only when there is real content to show (not a black frame).
@@ -56,6 +60,9 @@ public:
 	[[nodiscard]] QString scaleMode() const { return this->mScaleMode; }
 	void setScaleMode(const QString& scaleMode);
 
+	[[nodiscard]] bool audioEnabled() const { return this->mAudioEnabled; }
+	void setAudioEnabled(bool audioEnabled);
+
 	[[nodiscard]] bool rendered() const { return this->mRendered; }
 
 signals:
@@ -63,6 +70,7 @@ signals:
 	void liveChanged();
 	void fpsChanged();
 	void scaleModeChanged();
+	void audioEnabledChanged();
 	void renderedChanged();
 
 protected:
@@ -73,6 +81,7 @@ private:
 	bool mLive = true;
 	int mFps = 60;
 	QString mScaleMode = QStringLiteral("fill");
+	bool mAudioEnabled = false;
 	bool mRendered = false;      // first frame of the current project seen (GUI thread)
 	bool mLoadFrameSeen = false; // per-load latch (render thread only)
 
