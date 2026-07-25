@@ -225,7 +225,20 @@ void WeThread::run() {
 	// create their SDL streams and video wallpapers get mpv volume 0 at creation,
 	// so it cannot be re-enabled at runtime - the surface rebuilds this thread to
 	// flip it.
-	if (!this->mAudioEnabled) argv.push_back(const_cast<char*>("--silent"));
+	//
+	// When audio IS on: disable automute (WE mutes itself while ANY other
+	// unmuted sink-input exists - virtual sinks/headset loopbacks trip it
+	// permanently; the shell's own toggle is the mute control here) and run at
+	// full internal volume (default is 15/128) so the per-stream system mixer
+	// is the one volume knob. --volume and --silent are mutually exclusive to
+	// WE's parser; only one branch ever adds its flags.
+	if (this->mAudioEnabled) {
+		argv.push_back(const_cast<char*>("--noautomute"));
+		argv.push_back(const_cast<char*>("--volume"));
+		argv.push_back(const_cast<char*>("128"));
+	} else {
+		argv.push_back(const_cast<char*>("--silent"));
+	}
 	// Pass the scaling mode: WE applies it for video wallpapers (which composite
 	// into the driver output, not a scene FBO). Scenes render into their own
 	// scene FBO at native projection and we scale those ourselves at blit time.
