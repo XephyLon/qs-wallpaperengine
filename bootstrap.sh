@@ -175,6 +175,58 @@ if "Skipping particle system with no material" not in s:
     open(p, "w").write(s)
 PY
 
+# JsonExtensions::optional<T>: tolerate string-typed numbers. Some workshop
+# wallpapers store numeric fields as strings ("pointsize": "16"); the implicit
+# json->T conversion in these noexcept accessors then throws type_error.302,
+# which std::terminate()s the whole embedded Quickshell host (seen via
+# ObjectParser::parseText -> optional<int>). Coerce numeric strings, otherwise
+# log and fall back to the default/nullopt. Idempotent (marker-guarded).
+python3 - "$WE_SRC/src/WallpaperEngine/Data/JSON.h" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "EMBED PATCH: tolerate string-typed numbers" not in s:
+    old_nullopt = "\tif (it == base.end () || it->is_null ()) {\n\t    return std::nullopt;\n\t}\n\n\treturn *it;\n    }"
+    new_nullopt = (
+        "\tif (it == base.end () || it->is_null ()) {\n\t    return std::nullopt;\n\t}\n\n"
+        "\t// EMBED PATCH: tolerate string-typed numbers - some workshop wallpapers\n"
+        "\t// store numeric fields as strings; the implicit conversion throws inside\n"
+        "\t// this noexcept accessor, which aborts the whole embedded host process.\n"
+        "\ttry {\n"
+        "\t    return *it;\n"
+        "\t} catch (const std::exception&) {\n"
+        "\t    if constexpr (std::is_arithmetic_v<T>) {\n"
+        "\t\tif (it->is_string ()) {\n"
+        "\t\t    try { return static_cast<T> (std::stod (it->template get<std::string> ())); } catch (...) {}\n"
+        "\t\t}\n"
+        "\t    }\n"
+        "\t    sLog.error (\"Invalid value type for key \", key, \", ignoring. Value: \", it->dump ());\n"
+        "\t    return std::nullopt;\n"
+        "\t}\n    }"
+    )
+    old_default = "\tif (it == base.end () || it->is_null ()) {\n\t    return defaultValue;\n\t}\n\n\treturn (*it);\n    }"
+    new_default = (
+        "\tif (it == base.end () || it->is_null ()) {\n\t    return defaultValue;\n\t}\n\n"
+        "\t// EMBED PATCH: see optional(key) above - same string-typed-number hazard.\n"
+        "\ttry {\n"
+        "\t    return (*it);\n"
+        "\t} catch (const std::exception&) {\n"
+        "\t    if constexpr (std::is_arithmetic_v<T>) {\n"
+        "\t\tif (it->is_string ()) {\n"
+        "\t\t    try { return static_cast<T> (std::stod (it->template get<std::string> ())); } catch (...) {}\n"
+        "\t\t}\n"
+        "\t    }\n"
+        "\t    sLog.error (\"Invalid value type for key \", key, \", using default. Value: \", it->dump ());\n"
+        "\t    return defaultValue;\n"
+        "\t}\n    }"
+    )
+    if old_nullopt not in s or old_default not in s:
+        sys.exit("EMBED PATCH: JsonExtensions::optional anchors not found in JSON.h")
+    s = s.replace(old_nullopt, new_nullopt, 1).replace(old_default, new_default, 1)
+    if "#include <type_traits>" not in s:
+        s = s.replace("#include <string>\n", "#include <string>\n#include <type_traits>\n", 1)
+    open(p, "w").write(s)
+PY
+
 # Register the four .cpp in the lib's COMMON_SOURCES, after the GLFW driver.
 WE_CMAKE="$WE_SRC/CMakeLists.txt"
 if ! grep -q 'CFboOpenGLDriver.cpp' "$WE_CMAKE"; then
