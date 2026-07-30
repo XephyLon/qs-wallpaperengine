@@ -1,5 +1,7 @@
 # qs-wallpaperengine
 
+> Version `0.1.0` — see [CHANGELOG.md](CHANGELOG.md). SemVer, pre-1.0.
+
 Embed **linux-wallpaperengine** directly into **Quickshell** so the shell owns the
 live Wallpaper Engine (WE) frames as a Qt texture. This dissolves the whole
 "foreign WE surface" problem: widget frosting, lock blur and wallpaper
