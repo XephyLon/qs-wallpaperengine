@@ -80,10 +80,19 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	// render thread, with the new context current - re-shares against it and
 	// recovers automatically.
 	auto* qtCtx = QOpenGLContext::currentContext();
-	if (!this->mThread || this->mLoadedPath != this->mProjectPath || this->mLoadedContext != qtCtx) {
-		if (this->mThread && this->mLoadedContext != qtCtx) {
-			qInfo("WallpaperEngineSurface: GL context changed; rebuilding WE thread");
-		}
+	const bool contextChanged = this->mThread && this->mLoadedContext != qtCtx;
+	if (contextChanged) {
+		qInfo("WallpaperEngineSurface: GL context changed; rebuilding WE thread");
+		// The old node's texture wraps a GL texture NAME from the destroyed
+		// context's share group. In the new share group that name is dangling -
+		// or recycled for unrelated live textures - so keeping the node on
+		// screen while WE rebuilds draws random churning content (strobing
+		// garbage after leaving fullscreen). Drop it: a brief black-out until
+		// the first new frame is the correct degradation.
+		delete node;
+		node = nullptr;
+	}
+	if (!this->mThread || this->mLoadedPath != this->mProjectPath || contextChanged) {
 		this->mThread.reset();
 		this->mShareContext.reset();
 
