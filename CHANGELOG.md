@@ -6,6 +6,13 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 ## [Unreleased]
 
 ### Fixed
+- Wallpaper black while a game is running, even tabbed out: the embedded WE
+  still ran linux-wallpaperengine's own fullscreen pause (`pauseOnFullscreen`
+  defaults on), which halts the render loop for ANY fullscreen toplevel -
+  including one parked on an invisible workspace. The embed now passes
+  `--no-fullscreen-pause`: fullscreen policy belongs to the shell, whose
+  Background already hides itself when a fullscreen client covers the active
+  workspace.
 - Wallpaper black-outs and wedged (permanently black) video wallpapers while a
   game runs: Hyprland's fullscreen direct-scanout recreates Qt's scene-graph
   GL contexts several times a minute in a game session, and every recreation

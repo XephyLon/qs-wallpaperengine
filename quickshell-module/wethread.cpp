@@ -220,6 +220,13 @@ void WeThread::run() {
 	    const_cast<char*>(geo.c_str()),
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
+	    // The shell owns fullscreen policy (Background hides itself when a
+	    // fullscreen client covers the active workspace). WE's own detector
+	    // must stay out of it: pauseOnFullscreen defaults on and halts the
+	    // render loop for ANY fullscreen toplevel - including a game parked on
+	    // another workspace - which left the wallpaper black even when the
+	    // game was tabbed out.
+	    const_cast<char*>("--no-fullscreen-pause"),
 	};
 	// Audio is a load-time decision inside WE: with --silent, sound objects never
 	// create their SDL streams and video wallpapers get mpv volume 0 at creation,
