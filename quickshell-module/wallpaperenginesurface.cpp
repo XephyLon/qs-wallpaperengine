@@ -72,18 +72,26 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	// eglCreateContext sharing fails EGL_BAD_MATCH on NVIDIA), then hand its
 	// native EGLContext to the WE thread for a surfaceless makeCurrent.
 	//
-	// Rebuild not only on a project switch but whenever Qt's current GL context
-	// differs from the one we built against: Hyprland's fullscreen direct-scanout
-	// can make Qt destroy and recreate this window's scene-graph context, which
-	// orphans our shared EGLContext and leaves WE's texture invalid in the new
-	// context (the wallpaper "breaks" and stays broken). Rebuilding here - on the
-	// render thread, with the new context current - re-shares against it and
-	// recovers automatically.
-	auto* qtCtx = QOpenGLContext::currentContext();
-	// Pointer inequality alone is not enough: a destroy+recreate can hand the
-	// new QOpenGLContext the old one's heap address, so mContextLost (latched by
+	// Share against the process-global share context when there is one
+	// (AA_ShareOpenGLContexts, set by the patched main.cpp): every scene-graph
+	// context Qt creates joins that share group, so WE's textures stay valid
+	// across the compositor-forced scene-graph context recreations Hyprland's
+	// fullscreen direct-scanout causes - no rebuild, no black-out. A game
+	// session can force several recreations a minute; rebuilding the WE thread
+	// for each one is what used to wedge video wallpapers into permanent black
+	// (mpv teardown under GPU contention overran the join deadline, the old
+	// thread detached, and two WE instances then fought over process globals).
+	//
+	// Without a global share context (stock build), fall back to sharing with
+	// the current SG context and rebuilding when it dies. Pointer inequality
+	// alone is not enough for that: a destroy+recreate can hand the new
+	// QOpenGLContext the old one's heap address, so mContextLost (latched by
 	// aboutToBeDestroyed on the adopted context) is the authoritative signal.
-	const bool contextChanged = this->mThread && (this->mLoadedContext != qtCtx || this->mContextLost);
+	auto* qtCtx = QOpenGLContext::currentContext();
+	auto* shareTarget = QOpenGLContext::globalShareContext();
+	if (!shareTarget) shareTarget = qtCtx;
+	const bool contextChanged =
+	    this->mThread && (this->mLoadedContext != shareTarget || this->mContextLost);
 	if (contextChanged) {
 		qInfo("WallpaperEngineSurface: GL context changed; rebuilding WE thread");
 		// The old node's texture wraps a GL texture NAME from the destroyed
@@ -101,7 +109,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 
 		auto share = std::make_unique<QOpenGLContext>();
 		share->setFormat(qtCtx->format());
-		share->setShareContext(qtCtx);
+		share->setShareContext(shareTarget);
 		if (!share->create() || !share->shareContext()) {
 			qWarning("WallpaperEngineSurface: failed to create shared GL context");
 			return node;
@@ -114,21 +122,24 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 			return node;
 		}
 
-		// Adopting a (possibly new) context: latch its destruction so the next
-		// updatePaintNode rebuilds even if the replacement reuses this address.
-		// aboutToBeDestroyed fires on the context's thread (the render thread,
-		// same as this code), so a plain bool is safe. Reconnecting on a
+		// Adopting a (possibly new) share target: latch its destruction so the
+		// next updatePaintNode rebuilds even if a replacement reuses this heap
+		// address. The global share context lives until app shutdown, so with
+		// it this effectively never fires; the latch matters for the
+		// fallback-to-SG-context case. aboutToBeDestroyed fires on the
+		// context's owning thread, so a plain bool is safe for the SG-context
+		// case (render thread, same as this code). Reconnecting on a
 		// same-context project switch would stack duplicate connections, so
-		// only connect when the context is actually new.
-		if (this->mLoadedContext != qtCtx || this->mContextLost) {
-			QObject::connect(qtCtx, &QOpenGLContext::aboutToBeDestroyed, this, [this] {
+		// only connect when the target is actually new.
+		if (this->mLoadedContext != shareTarget || this->mContextLost) {
+			QObject::connect(shareTarget, &QOpenGLContext::aboutToBeDestroyed, this, [this] {
 				this->mContextLost = true;
 			}, Qt::DirectConnection);
 		}
 		this->mContextLost = false;
 		this->mShareContext = std::move(share);
 		this->mLoadedPath = this->mProjectPath;
-		this->mLoadedContext = qtCtx;
+		this->mLoadedContext = shareTarget;
 		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,

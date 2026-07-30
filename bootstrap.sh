@@ -264,10 +264,11 @@ if ! grep -q 'add_subdirectory(wallpaperengine)' "$QS_SRC/src/CMakeLists.txt"; t
 fi
 # Force Qt Quick onto DESKTOP OpenGL (default is GLES here). WE requires desktop
 # GL (EGL_OPENGL_BIT + glew) and GLES<->GL contexts can't share GL objects.
-if ! grep -q 'setRenderableType' "$QS_SRC/src/main.cpp"; then
+if ! grep -q 'AA_ShareOpenGLContexts' "$QS_SRC/src/main.cpp"; then
 	cat > "$QS_SRC/src/main.cpp" <<'CPP'
 #include "launch/main.hpp"
 
+#include <QtCore/QCoreApplication>
 #include <QtGui/QSurfaceFormat>
 
 int main(int argc, char** argv) {
@@ -279,6 +280,14 @@ int main(int argc, char** argv) {
 	fmt.setVersion(4, 5);
 	fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
 	QSurfaceFormat::setDefaultFormat(fmt);
+
+	// One process-global GL share group: every scene-graph context Qt creates
+	// shares objects with QOpenGLContext::globalShareContext(). The WE module
+	// builds its render context against that global context, so a
+	// compositor-forced scene-graph context recreation (Hyprland fullscreen
+	// direct scanout) no longer orphans the wallpaper texture - and the WE
+	// thread never needs a rebuild for it.
+	QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
 
 	return qs::launch::main(argc, argv);
 }

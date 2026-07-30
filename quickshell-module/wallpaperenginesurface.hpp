@@ -90,11 +90,11 @@ private:
 	std::unique_ptr<QOpenGLContext> mShareContext;
 	std::unique_ptr<WeThread> mThread;
 	QString mLoadedPath;
-	// The Qt GL context the share context + WE thread were built against. Only an
-	// identity token (never dereferenced): if Qt tears down and recreates the
-	// scene-graph context - which Hyprland's fullscreen direct-scanout can force -
-	// the old shared EGLContext orphans and WE's texture stops being valid, so we
-	// must rebuild against the new context. nullptr until the first build.
+	// The share TARGET the WE context was built against: the process-global
+	// share context when AA_ShareOpenGLContexts is set (then it lives for the
+	// app's lifetime and scene-graph context recreations don't matter), else
+	// the scene-graph context itself. Only an identity token (never
+	// dereferenced). nullptr until the first build.
 	QOpenGLContext* mLoadedContext = nullptr;
 	// Pointer identity alone misses a destroy+recreate that reuses the same heap
 	// address (common: the render thread frees and reallocates back to back), and
