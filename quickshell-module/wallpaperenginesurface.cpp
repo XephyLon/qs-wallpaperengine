@@ -80,15 +80,18 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	// render thread, with the new context current - re-shares against it and
 	// recovers automatically.
 	auto* qtCtx = QOpenGLContext::currentContext();
-	const bool contextChanged = this->mThread && this->mLoadedContext != qtCtx;
+	// Pointer inequality alone is not enough: a destroy+recreate can hand the
+	// new QOpenGLContext the old one's heap address, so mContextLost (latched by
+	// aboutToBeDestroyed on the adopted context) is the authoritative signal.
+	const bool contextChanged = this->mThread && (this->mLoadedContext != qtCtx || this->mContextLost);
 	if (contextChanged) {
 		qInfo("WallpaperEngineSurface: GL context changed; rebuilding WE thread");
 		// The old node's texture wraps a GL texture NAME from the destroyed
 		// context's share group. In the new share group that name is dangling -
-		// or recycled for unrelated live textures - so keeping the node on
-		// screen while WE rebuilds draws random churning content (strobing
-		// garbage after leaving fullscreen). Drop it: a brief black-out until
-		// the first new frame is the correct degradation.
+		// or recycled for unrelated live textures (a widget's cached layer,
+		// drawn fullscreen) - so keeping the node on screen while WE rebuilds
+		// draws garbage. Drop it: a brief black-out until the first new frame
+		// is the correct degradation.
 		delete node;
 		node = nullptr;
 	}
@@ -111,6 +114,18 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 			return node;
 		}
 
+		// Adopting a (possibly new) context: latch its destruction so the next
+		// updatePaintNode rebuilds even if the replacement reuses this address.
+		// aboutToBeDestroyed fires on the context's thread (the render thread,
+		// same as this code), so a plain bool is safe. Reconnecting on a
+		// same-context project switch would stack duplicate connections, so
+		// only connect when the context is actually new.
+		if (this->mLoadedContext != qtCtx || this->mContextLost) {
+			QObject::connect(qtCtx, &QOpenGLContext::aboutToBeDestroyed, this, [this] {
+				this->mContextLost = true;
+			}, Qt::DirectConnection);
+		}
+		this->mContextLost = false;
 		this->mShareContext = std::move(share);
 		this->mLoadedPath = this->mProjectPath;
 		this->mLoadedContext = qtCtx;

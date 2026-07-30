@@ -96,6 +96,13 @@ private:
 	// the old shared EGLContext orphans and WE's texture stops being valid, so we
 	// must rebuild against the new context. nullptr until the first build.
 	QOpenGLContext* mLoadedContext = nullptr;
+	// Pointer identity alone misses a destroy+recreate that reuses the same heap
+	// address (common: the render thread frees and reallocates back to back), and
+	// then WE's texture NAMES silently alias unrelated textures in the new share
+	// group (the wallpaper draws e.g. a widget's cached layer, fullscreen).
+	// aboutToBeDestroyed on the adopted context latches this flag instead; set and
+	// read on the render thread.
+	bool mContextLost = false;
 	QTimer mRepaint; // GUI-thread repaint driver at mFps
 
 	void updateRepaintTimer();
