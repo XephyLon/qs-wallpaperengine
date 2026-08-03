@@ -220,13 +220,24 @@ void WeThread::run() {
 	    const_cast<char*>(geo.c_str()),
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
-	    // The shell owns fullscreen policy (Background hides itself when a
-	    // fullscreen client covers the active workspace). WE's own detector
-	    // must stay out of it: pauseOnFullscreen defaults on and halts the
-	    // render loop for ANY fullscreen toplevel - including a game parked on
-	    // another workspace - which left the wallpaper black even when the
-	    // game was tabbed out.
-	    const_cast<char*>("--no-fullscreen-pause"),
+	    // Pause only for a fullscreen window that is actually in front of the
+	    // wallpaper. WE's detector defaults to counting EVERY fullscreen
+	    // toplevel the compositor advertises - output, workspace and visibility
+	    // are not part of the test - so a game parked on a workspace the user
+	    // had left still froze the wallpaper they were looking at, on a still
+	    // frame, until it stopped being fullscreen.
+	    //
+	    // Restricting the count to *activated* toplevels is the whole fix
+	    // (isRelevant() drops a non-activated one): a fullscreen window holds
+	    // activation only while it is focused, which is exactly when it covers
+	    // the wallpaper. Switch away and it drops activation, so the wallpaper
+	    // the user can now see resumes.
+	    //
+	    // This has to be WE's own pause rather than the shell's. `live` on the
+	    // surface gates Qt's repaint timer and never reaches this thread, so it
+	    // cannot idle a video wallpaper - only setPause() in here reaches mpv,
+	    // and it is private to WallpaperApplication.
+	    const_cast<char*>("--fullscreen-pause-only-active"),
 	};
 	// Audio is a load-time decision inside WE: with --silent, sound objects never
 	// create their SDL streams and video wallpapers get mpv volume 0 at creation,
