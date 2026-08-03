@@ -40,10 +40,38 @@ WallpaperEngineSurface::WallpaperEngineSurface(QQuickItem* parent): QQuickItem(p
 	// render thread deadlocks against the still-running WE thread and the process
 	// hangs on quit (SIGTERM appears ignored). aboutToQuit fires first, on the
 	// GUI thread, so the join happens at a safe point.
-	QObject::connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
-		this->mThread.reset();
+	QObject::connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { this->releaseThread(); });
+}
+
+void WallpaperEngineSurface::releaseThread() {
+	if (!this->mThread) {
 		this->mShareContext.reset();
-	});
+		return;
+	}
+
+	// ~WeThread bounds its join: a wallpaper wedged inside WE's setup() never
+	// observes the stop flag, so after a few seconds the thread is DETACHED and
+	// left running rather than freezing the shell. Detached does not mean gone -
+	// it still has this QOpenGLContext's EGLContext current and still issues GL
+	// through it. Destroying the context here would therefore pull it out from
+	// under a live thread while that thread is mid-draw, in a context that shares
+	// its object namespace with Qt's. That is a real mechanism for one bad
+	// wallpaper to damage every later one, and it is the mechanism this class's
+	// own header promised did not exist ("must be joined before the context is
+	// destroyed") - which is true of the join path and false of the detach path.
+	//
+	// So on the detach path, leak the context on purpose. A wedged WE thread has
+	// already stranded its GL objects and its mpv/SDL state; adding one
+	// EGLContext to that is the cheap half of the trade. The alternative is
+	// undefined behaviour in the shared group.
+	auto detached = this->mThread->detachedFlag();
+	this->mThread.reset();
+	if (detached && detached->load()) {
+		qWarning("WallpaperEngineSurface: WE thread detached; leaking its GL context deliberately");
+		(void) this->mShareContext.release();
+	} else {
+		this->mShareContext.reset();
+	}
 }
 
 void WallpaperEngineSurface::updateRepaintTimer() {
@@ -55,7 +83,11 @@ void WallpaperEngineSurface::updateRepaintTimer() {
 	}
 }
 
-WallpaperEngineSurface::~WallpaperEngineSurface() = default;
+// aboutToQuit normally gets here first, but an item destroyed on its own (the
+// Loader going inactive, a monitor disappearing) still has to go through
+// releaseThread rather than the members' declaration order, so that a detached
+// thread's context is leaked rather than destroyed under it.
+WallpaperEngineSurface::~WallpaperEngineSurface() { this->releaseThread(); }
 
 QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* /*data*/) {
 	auto* node = static_cast<QSGSimpleTextureNode*>(oldNode);
@@ -104,8 +136,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		node = nullptr;
 	}
 	if (!this->mThread || this->mLoadedPath != this->mProjectPath || contextChanged) {
-		this->mThread.reset();
-		this->mShareContext.reset();
+		this->releaseThread();
 
 		auto share = std::make_unique<QOpenGLContext>();
 		share->setFormat(qtCtx->format());
@@ -141,10 +172,34 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		this->mLoadedPath = this->mProjectPath;
 		this->mLoadedContext = shareTarget;
 		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
+		this->mFailSeen = false;      // ... and the failure latch
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
 		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled
 		);
+	}
+
+	// The WE thread gave up on this project. Report it once, on the GUI thread,
+	// so QML can put the static wallpaper back; and drop the node, because
+	// whatever it is holding is either nothing or a texture that will never be
+	// written to again. Without this the surface sits there publishing an
+	// unwritten texture and the desktop is simply black, with `rendered` true and
+	// nothing in the log to act on.
+	if (this->mThread && this->mThread->failed() && !this->mFailSeen) {
+		this->mFailSeen = true;
+		delete node;
+		node = nullptr;
+		QMetaObject::invokeMethod(
+		    this,
+		    [this] {
+			    if (!this->mFailed) {
+				    this->mFailed = true;
+				    emit this->failedChanged();
+			    }
+		    },
+		    Qt::QueuedConnection
+		);
+		return nullptr;
 	}
 
 	GLuint texId = this->mThread ? this->mThread->acquireTexture() : 0;
@@ -196,6 +251,13 @@ void WallpaperEngineSurface::setProjectPath(const QString& projectPath) {
 	if (this->mRendered) {
 		this->mRendered = false;
 		emit this->renderedChanged();
+	}
+	// A new project gets a clean slate: the previous one failing says nothing
+	// about this one, and leaving `failed` set would strand the shell on the
+	// static image for the rest of the session.
+	if (this->mFailed) {
+		this->mFailed = false;
+		emit this->failedChanged();
 	}
 	this->updateRepaintTimer();
 	this->update();

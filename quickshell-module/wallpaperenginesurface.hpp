@@ -41,6 +41,14 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// Resets to false when projectPath changes. Lets QML start a wallpaper
 	/// transition only when there is real content to show (not a black frame).
 	Q_PROPERTY(bool rendered READ rendered NOTIFY renderedChanged);
+	/// True when the current project cannot be rendered in the embed at all -
+	/// the renderer failed to start, or its render targets came back INCOMPLETE
+	/// (typically a scene whose source texture plus per-element composite
+	/// buffers do not fit in VRAM at screen size). Resets to false when
+	/// projectPath changes. While this is set the shell should fall back to the
+	/// static wallpaper image, exactly as it already does for `web` projects -
+	/// leaving the surface on screen only shows black.
+	Q_PROPERTY(bool failed READ failed NOTIFY failedChanged);
 	// clang-format on
 
 public:
@@ -65,6 +73,8 @@ public:
 
 	[[nodiscard]] bool rendered() const { return this->mRendered; }
 
+	[[nodiscard]] bool failed() const { return this->mFailed; }
+
 signals:
 	void projectPathChanged();
 	void liveChanged();
@@ -72,6 +82,7 @@ signals:
 	void scaleModeChanged();
 	void audioEnabledChanged();
 	void renderedChanged();
+	void failedChanged();
 
 protected:
 	QSGNode* updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* data) override;
@@ -83,7 +94,9 @@ private:
 	QString mScaleMode = QStringLiteral("fill");
 	bool mAudioEnabled = false;
 	bool mRendered = false;      // first frame of the current project seen (GUI thread)
+	bool mFailed = false;        // current project cannot render (GUI thread)
 	bool mLoadFrameSeen = false; // per-load latch (render thread only)
+	bool mFailSeen = false;      // per-load latch (render thread only)
 
 	// Declared before mThread so it outlives it: the thread uses this context's
 	// native EGLContext and must be joined before the context is destroyed.
@@ -106,6 +119,8 @@ private:
 	QTimer mRepaint; // GUI-thread repaint driver at mFps
 
 	void updateRepaintTimer();
+	// Tear down mThread and, only if it was actually joined, mShareContext.
+	void releaseThread();
 };
 
 } // namespace qs::wallpaperengine
