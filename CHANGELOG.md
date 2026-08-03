@@ -3,16 +3,23 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
-## [Unreleased]
+## [0.1.0] — 2026-08-03
 
 ### Fixed
-- Wallpaper black while a game is running, even tabbed out: the embedded WE
-  still ran linux-wallpaperengine's own fullscreen pause (`pauseOnFullscreen`
-  defaults on), which halts the render loop for ANY fullscreen toplevel -
-  including one parked on an invisible workspace. The embed now passes
-  `--no-fullscreen-pause`: fullscreen policy belongs to the shell, whose
-  Background already hides itself when a fullscreen client covers the active
-  workspace.
+- A live wallpaper froze on a still frame whenever any window anywhere was
+  fullscreen — including one parked on a workspace the user had left — and
+  stayed frozen until it stopped being fullscreen. The embedded WE ran
+  linux-wallpaperengine's own fullscreen pause (`pauseOnFullscreen` defaults
+  on), whose detector counts EVERY fullscreen toplevel the compositor
+  advertises: output, workspace and visibility are not part of the test.
+  `WallpaperApplication::render()` then early-returns and pauses mpv with it.
+  The embed now passes `--fullscreen-pause-only-active`, which narrows that
+  count to *activated* toplevels — a window holds activation exactly while it
+  is focused, which is exactly while it covers the wallpaper. So a live
+  wallpaper idles behind a fullscreen window and animates whenever it is on
+  screen. (The shell cannot own this policy itself: its own suppression stops
+  Qt drawing the surface and `live` only gates the repaint timer, neither of
+  which reaches the WE thread — only WE's `setPause()` reaches mpv.)
 - Wallpaper black-outs and wedged (permanently black) video wallpapers while a
   game runs: Hyprland's fullscreen direct-scanout recreates Qt's scene-graph
   GL contexts several times a minute in a game session, and every recreation
