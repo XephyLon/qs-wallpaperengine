@@ -29,11 +29,31 @@ std::string assetsDir() {
 
 WallpaperEngineSurface::WallpaperEngineSurface(QQuickItem* parent): QQuickItem(parent) {
 	this->setFlag(QQuickItem::ItemHasContents);
-	// The WE thread produces frames on its own; the surface just repaints at the
-	// display cadence. Driving update() from a GUI-thread timer (not from inside
-	// updatePaintNode on the render thread) keeps the scene-graph sync race-free.
-	QObject::connect(&this->mRepaint, &QTimer::timeout, this, [this] { this->update(); });
-	this->updateRepaintTimer();
+	// Repaint when the WE thread has actually produced a frame - not on a clock
+	// of our own running at `fps`. Two clocks at nominally the same rate drift,
+	// so a poll clock both repeats frames (a full-screen repaint, a full-surface
+	// wl_surface commit and a compositor recomposite for a texture that has not
+	// changed) and drops fresh ones. It also is not even the right rate:
+	// 1000/fps is integer milliseconds, so fps=24 polled at 41ms is 24.4Hz,
+	// fps=144 polls at 166Hz and fps=90 at 90.9Hz.
+	//
+	// The sink hop puts update() on the GUI thread rather than calling it from
+	// inside WE's render loop or from updatePaintNode on the render thread, which
+	// keeps the scene-graph sync race-free exactly as the old timer did.
+	this->mFrameSink = std::make_shared<WeFrameSink>();
+	QObject::connect(this->mFrameSink.get(), &WeFrameSink::frame, this, [this] {
+		this->mFrameSincePoll = true;
+		if (this->mLive && !this->mProjectPath.isEmpty()) this->update();
+	});
+	QObject::connect(&this->mStallPoll, &QTimer::timeout, this, [this] {
+		if (this->mFrameSincePoll) {
+			this->mFrameSincePoll = false;
+			return;
+		}
+		this->update();
+	});
+	this->mStallPoll.setInterval(1000);
+	this->updateFrameDriver();
 
 	// Stop + join the WE thread while the event loop and render thread are still
 	// alive. If we wait for the item destructor (Qt teardown), the scene-graph
@@ -74,12 +94,16 @@ void WallpaperEngineSurface::releaseThread() {
 	}
 }
 
-void WallpaperEngineSurface::updateRepaintTimer() {
+void WallpaperEngineSurface::updateFrameDriver() {
+	// live=false freezes on the current frame: the producer keeps running (WE has
+	// no pause that survives a resume cleanly) but its notifications stop
+	// repainting us, so the surface holds the last texture it published and the
+	// window stops committing entirely.
 	if (this->mLive && !this->mProjectPath.isEmpty()) {
-		this->mRepaint.setInterval(1000 / (this->mFps > 0 ? this->mFps : 60));
-		if (!this->mRepaint.isActive()) this->mRepaint.start();
+		this->mFrameSincePoll = false;
+		if (!this->mStallPoll.isActive()) this->mStallPoll.start();
 	} else {
-		this->mRepaint.stop();
+		this->mStallPoll.stop();
 	}
 }
 
@@ -173,9 +197,13 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		this->mLoadedContext = shareTarget;
 		this->mLoadFrameSeen = false; // new project: re-arm the first-frame latch
 		this->mFailSeen = false;      // ... and the failure latch
+		// The callback holds its own shared_ptr to the sink, so the sink survives
+		// for as long as the thread can still call it - including a thread that
+		// outlived this item by being detached.
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
-		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled
+		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled,
+		    [sink = this->mFrameSink] { sink->post(); }
 		);
 	}
 
@@ -203,7 +231,7 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 	}
 
 	GLuint texId = this->mThread ? this->mThread->acquireTexture() : 0;
-	if (texId == 0) return node; // nothing ready yet; timer will retry
+	if (texId == 0) return node; // nothing ready yet; the first publish wakes us
 
 	// First real frame of this project: tell QML (on the GUI thread) so a
 	// wallpaper transition can start against actual content, not a black frame.
@@ -259,7 +287,7 @@ void WallpaperEngineSurface::setProjectPath(const QString& projectPath) {
 		this->mFailed = false;
 		emit this->failedChanged();
 	}
-	this->updateRepaintTimer();
+	this->updateFrameDriver();
 	this->update();
 }
 
@@ -267,7 +295,7 @@ void WallpaperEngineSurface::setLive(bool live) {
 	if (live == this->mLive) return;
 	this->mLive = live;
 	emit this->liveChanged();
-	this->updateRepaintTimer();
+	this->updateFrameDriver();
 	this->update();
 }
 
@@ -275,7 +303,8 @@ void WallpaperEngineSurface::setFps(int fps) {
 	if (fps == this->mFps) return;
 	this->mFps = fps;
 	emit this->fpsChanged();
-	this->updateRepaintTimer();
+	// Nothing to do on this side: fps is the producer's rate, and the surface
+	// follows the producer.
 	if (this->mThread) this->mThread->setFps(fps);
 }
 

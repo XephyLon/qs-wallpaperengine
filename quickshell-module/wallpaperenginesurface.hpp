@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 
 #include <qopenglcontext.h>
@@ -12,6 +13,44 @@
 namespace qs::wallpaperengine {
 
 class WeThread;
+
+/// Wake-up channel from the WE thread to its surface.
+///
+/// Owned through a shared_ptr held by BOTH sides, because the two do not
+/// necessarily die together: a wallpaper wedged inside WE's setup() gets its
+/// thread DETACHED (see ~WeThread) and keeps running after the surface is gone.
+/// A raw `this` in the thread's callback would then be dangling; a shared sink
+/// is merely orphaned - it posts into an object with no receivers left, which is
+/// a no-op.
+class WeFrameSink: public QObject {
+	Q_OBJECT;
+
+public:
+	// Called on the WE thread. Hops to the sink's own thread (the GUI thread,
+	// where it is constructed) so the surface's update() happens there, not
+	// inside WE's render loop.
+	void post() {
+		// One pending wake-up is enough. Without the coalesce, a GUI thread
+		// stalled for a moment - a wallpaper switch tearing down mpv can do that -
+		// comes back to a queue of `fps` identical wake-ups per stalled second.
+		// Cleared before the emit, so a frame published mid-emit still posts.
+		if (this->mPending.exchange(true)) return;
+		QMetaObject::invokeMethod(
+		    this,
+		    [this] {
+			    this->mPending.store(false);
+			    emit this->frame();
+		    },
+		    Qt::QueuedConnection
+		);
+	}
+
+signals:
+	void frame();
+
+private:
+	std::atomic<bool> mPending {false};
+};
 
 ///! Renders a live Wallpaper Engine wallpaper into the scene graph.
 /// WallpaperEngineSurface runs an embedded linux-wallpaperengine renderer on its
@@ -28,7 +67,10 @@ class WallpaperEngineSurface: public QQuickItem {
 	Q_PROPERTY(QString projectPath READ projectPath WRITE setProjectPath NOTIFY projectPathChanged);
 	/// Render continuously (true) or a single frame (false). Default true.
 	Q_PROPERTY(bool live READ live WRITE setLive NOTIFY liveChanged);
-	/// Target FPS while live. Default 60.
+	/// Target FPS while live. Default 60. This paces the wallpaper's frame
+	/// PRODUCTION only; the surface repaints (and so the window commits) once per
+	/// produced frame, so it is also the wallpaper's commit rate - it never
+	/// repaints a frame that has not changed, and never misses one that has.
 	Q_PROPERTY(int fps READ fps WRITE setFps NOTIFY fpsChanged);
 	/// Scaling mode: "fill" (crop to cover, default), "fit" (letterbox),
 	/// "stretch" (distort to fill), or "default" (native, centered).
@@ -116,9 +158,22 @@ private:
 	// aboutToBeDestroyed on the adopted context latches this flag instead; set and
 	// read on the render thread.
 	bool mContextLost = false;
-	QTimer mRepaint; // GUI-thread repaint driver at mFps
 
-	void updateRepaintTimer();
+	// Repaints are driven by the WE thread publishing a frame, through this sink.
+	// Handed to WeThread as a shared_ptr copy inside its callback, so it outlives
+	// a detached thread's last notification.
+	std::shared_ptr<WeFrameSink> mFrameSink;
+	// Set by the sink, cleared by the stall watchdog: "the producer published at
+	// least once since the last tick".
+	bool mFrameSincePoll = false;
+	// NOT a repaint clock. It only fires update() when the producer has gone
+	// silent for a whole interval, so that updatePaintNode still runs at a slow
+	// idle rate to notice a lost GL context or a wallpaper that died without
+	// getting as far as latching `failed`. A producing wallpaper never lets it
+	// through, so it costs nothing in the normal case.
+	QTimer mStallPoll;
+
+	void updateFrameDriver();
 	// Tear down mThread and, only if it was actually joined, mShareContext.
 	void releaseThread();
 };

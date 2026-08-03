@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,6 +23,15 @@ public:
 	// share with Qt's (built via QOpenGLContext::setShareContext so NVIDIA's
 	// share-compatibility flags match), not current on any thread. The WE thread
 	// makes it current surfacelessly and owns it for its lifetime.
+	//
+	// onFrame is called ON THIS THREAD every time a new frame is published, and
+	// once more if the wallpaper fails to start. It is how the consumer learns
+	// there is something new to draw: the surface does NOT poll on a timer, so a
+	// producer that publishes at 24fps makes the surface repaint 24 times a
+	// second - no duplicate repaints of a frame that has not changed, and no
+	// missed frames from a poll clock that drifts against this one. It must be
+	// cheap and thread-safe (it runs inside the render loop); the surface's one
+	// posts a queued call and returns.
 	WeThread(
 	    void* display,
 	    void* sharedContext,
@@ -31,7 +41,8 @@ public:
 	    int height,
 	    int fps,
 	    std::string scaleMode,
-	    bool audioEnabled
+	    bool audioEnabled,
+	    std::function<void()> onFrame = {}
 	);
 	~WeThread();
 
@@ -75,6 +86,9 @@ public:
 
 private:
 	void run(); // thread body
+	void notify() {
+		if (this->mOnFrame) this->mOnFrame();
+	}
 
 	void* mDisplay;
 	void* mContext;
@@ -84,6 +98,7 @@ private:
 	int mWidth;
 	int mHeight;
 	bool mAudioEnabled;
+	std::function<void()> mOnFrame;
 
 	std::thread mThread;
 	std::atomic<bool> mStop {false};
