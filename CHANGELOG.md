@@ -3,6 +3,50 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
+## [0.2.0] — 2026-08-03
+
+### Added
+- `WallpaperEngineSurface.failed` — true when the renderer cannot render the
+  current project at all: the WE thread failing to start, GLEW or context
+  setup failing, `setup()` throwing, no driver registering, or the render
+  targets coming back `INCOMPLETE`. Nothing is ever drawn into the surface in
+  that state, so without this a failed wallpaper was a black desktop with a
+  clean log and `rendered == true`. Consumers can watch it and fall back to a
+  static image.
+
+  Deliberately **not** driven by `glGetError`. That was measured first: the
+  `INVALID_FRAMEBUFFER_OPERATION` reported after mpv creates its texture fires
+  on every video-wallpaper start here and the video then plays perfectly —
+  linux-wallpaperengine never drains the error queue in its render path, so a
+  stale error survives and gets misattributed. A `glGetError`-driven detector
+  would black out every working video wallpaper.
+
+### Fixed
+- Up to ~118 MB of VRAM leaked per failed wallpaper load. Five early returns in
+  `WeThread::run()` skipped teardown of the full-screen RGBA8 colour target and
+  its D24S8 renderbuffer, which live in the process-global share group and so
+  outlived the context that created them. Enough failures and allocations begin
+  failing for *healthy* wallpapers — indistinguishable from "one bad wallpaper
+  corrupts the rest", with no corruption involved.
+- A wedged WE thread could corrupt GL state shared with Qt. `~WeThread` gives up
+  after a 3s join and detaches, but the caller then destroyed the
+  `QOpenGLContext` anyway — leaving a live thread issuing GL against a
+  destroyed context in a namespace shared with Qt. The context is now
+  deliberately leaked in that case, which is the cheaper of the two outcomes.
+
+### Changed
+- Repaints are driven by frame production rather than a timer. The old
+  `QTimer` interval was integer `1000/fps` ms, so the consumer clock never
+  matched the producer's — fps=24 polled at 24.4Hz, fps=144 at 166Hz, fps=90 at
+  90.9Hz — repeating unchanged frames (a full-screen commit and recomposite
+  each) while dropping fresh ones. `WeThread` now invokes an `onFrame` callback
+  on publish and on every failure path, hopped to the GUI thread through a
+  shared `WeFrameSink` so a detached thread can never post through a dangling
+  `this`; posts coalesce so a stalled GUI cannot queue up wake-ups. A 1Hz poll
+  remains but fires only when the producer has gone silent, preserving the old
+  timer's safety role (context-loss rebuild, failure latch) at no cost while
+  frames flow.
+
 ## [0.1.0] — 2026-08-03
 
 ### Fixed
