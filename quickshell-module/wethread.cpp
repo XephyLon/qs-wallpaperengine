@@ -59,7 +59,23 @@ struct RenderTarget {
 	GLuint fbo = 0;
 	GLuint depthStencil = 0;
 
-	void create(int w, int h) {
+	// Returns false if the target is unusable, in which case nothing may be
+	// rendered into it.
+	//
+	// This check is the whole difference between "this wallpaper failed" and "the
+	// desktop is black and nothing in the log says why". A full-screen RGBA8
+	// colour attachment plus a D24S8 renderbuffer is ~59MB at 5120x1440, and this
+	// allocation happens AFTER the scene it belongs to has taken its own share:
+	// linux-wallpaperengine gives every image element two composite FBOs at
+	// element size plus one per effect, so a scene whose source texture is 8192x4096
+	// has already spent hundreds of megabytes before we ask for ours. GL does not
+	// report that shortfall by failing glTexImage2D - it reports it by leaving the
+	// framebuffer INCOMPLETE. Every later glBlitFramebuffer into an incomplete
+	// framebuffer is a no-op that raises GL_INVALID_FRAMEBUFFER_OPERATION and
+	// nothing else, so without this check the loop below happily publishes a
+	// texture that is never written to, the surface happily samples it, and the
+	// user gets black with a clean log.
+	bool create(int w, int h) {
 		glGenTextures(1, &this->texture);
 		glBindTexture(GL_TEXTURE_2D, this->texture);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -80,7 +96,29 @@ struct RenderTarget {
 		glFramebufferRenderbuffer(
 		    GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, this->depthStencil
 		);
+
+		const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+		if (status != GL_FRAMEBUFFER_COMPLETE) {
+			std::fprintf(
+			    stderr, "WeThread: %dx%d render target incomplete (0x%x); wallpaper cannot render\n",
+			    w, h, status
+			);
+			std::fflush(stderr);
+			return false;
+		}
+		return true;
+	}
+
+	// Safe to call on a half-built or never-built target: the ids are 0 until
+	// their glGen* succeeded, and 0 is never passed to glDelete*.
+	void destroy() {
+		if (this->fbo != 0) glDeleteFramebuffers(1, &this->fbo);
+		if (this->depthStencil != 0) glDeleteRenderbuffers(1, &this->depthStencil);
+		if (this->texture != 0) glDeleteTextures(1, &this->texture);
+		this->fbo = 0;
+		this->depthStencil = 0;
+		this->texture = 0;
 	}
 };
 
@@ -132,8 +170,13 @@ WeThread::~WeThread() {
 	if (future.wait_for(std::chrono::seconds(3)) == std::future_status::ready) {
 		reaper.join();
 	} else {
+		// Record the detach BEFORE returning. The owner reads this flag through
+		// the shared_ptr it took a copy of, and it decides whether it is still
+		// allowed to destroy the QOpenGLContext whose EGLContext this thread is
+		// holding current. It is not: see WallpaperEngineSurface::releaseThread.
 		std::fprintf(stderr, "WeThread: render thread did not stop in time; detaching\n");
 		std::fflush(stderr);
+		this->mDetached->store(true);
 		reaper.detach();
 	}
 }
@@ -174,6 +217,27 @@ void WeThread::run() {
 	auto dpy = static_cast<EGLDisplay>(this->mDisplay);
 	auto ctx = static_cast<EGLContext>(this->mContext);
 
+	// Declared up here so every failure path below can free whatever was built.
+	RenderTarget targets[2];
+
+	// Every early return past this point has to release the context AND free the
+	// GL objects it already made. They used to just `return`, and that is the one
+	// way a failing wallpaper genuinely reaches the next one: the render targets
+	// live in the process-global SHARE group, so they outlive the context that
+	// created them (the global share context lives until the shell quits). At
+	// 5120x1440 a failed load stranded ~118MB of VRAM permanently, every time.
+	// Flip through a handful of wallpapers that fail this way and the card is
+	// full, at which point wallpapers that are perfectly fine start failing to
+	// allocate too - "corruption spreads", with no corruption involved.
+	auto failLoad = [&](const char* why) {
+		std::fprintf(stderr, "WeThread: %s\n", why);
+		std::fflush(stderr);
+		this->mFailed.store(true);
+		targets[0].destroy();
+		targets[1].destroy();
+		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+	};
+
 	// mpv (WE's video-wallpaper backend) hard-requires LC_NUMERIC=C, and refuses
 	// to create its context otherwise ("Non-C locale detected"). WE's own main()
 	// sets this; we bypass main, so set it here. LC_NUMERIC only affects C-library
@@ -187,6 +251,7 @@ void WeThread::run() {
 	if (!eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) {
 		std::fprintf(stderr, "WeThread: eglMakeCurrent failed: 0x%x\n", eglGetError());
 		std::fflush(stderr);
+		this->mFailed.store(true);
 		return;
 	}
 
@@ -196,19 +261,24 @@ void WeThread::run() {
 	if (GLenum err = glewInit(); err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
 		std::fprintf(stderr, "WeThread: glewInit failed: %s\n", glewGetErrorString(err));
 		std::fflush(stderr);
+		this->mFailed.store(true);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
 	if (glGenFramebuffers == nullptr) {
 		std::fprintf(stderr, "WeThread: core GL not loaded after glewInit\n");
 		std::fflush(stderr);
+		this->mFailed.store(true);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 		return;
 	}
 
-	RenderTarget targets[2];
-	targets[0].create(this->mWidth, this->mHeight);
-	targets[1].create(this->mWidth, this->mHeight);
+	if (!targets[0].create(this->mWidth, this->mHeight)
+	    || !targets[1].create(this->mWidth, this->mHeight))
+	{
+		failLoad("render targets unusable");
+		return;
+	}
 	int back = 0;
 
 	// Build the WE app on THIS thread/context.
@@ -276,19 +346,44 @@ void WeThread::run() {
 		app = std::make_unique<we::Application::WallpaperApplication>(*appContext);
 		app->setup();
 	} catch (const std::exception& e) {
+		// This is the path a scene too large for the GPU takes: WE validates its
+		// OWN framebuffers (CFBO and the mpv player are the only two places it
+		// calls glCheckFramebufferStatus) and turns a failure into a throw. It is
+		// therefore the detector for "this wallpaper is too big to render", and
+		// the reason `failed` is worth propagating: the shell can show the static
+		// image instead of a black screen.
+		//
+		// app is deliberately not cleanup()'d here - it threw part-way through
+		// setup(), so its invariants do not hold and cleanup() would be walking
+		// half-built state. The unique_ptr destructor below is as far as we go.
+		// WE strands some of its own GL objects on this path (its texture cache
+		// and FBO registry have no eviction API); ours are freed by failLoad().
 		std::fprintf(stderr, "WeThread: WE start failed: %s\n", e.what());
 		std::fflush(stderr);
-		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		failLoad("WE start failed");
 		return;
 	}
 	auto* driver = pendingDriverSlot();
 	pendingDriverSlot() = nullptr;
 	if (driver == nullptr) {
-		std::fprintf(stderr, "WeThread: driver never registered\n");
-		std::fflush(stderr);
 		app->cleanup();
-		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		failLoad("driver never registered");
 		return;
+	}
+
+	// One-shot diagnostic, NOT a failure test. WE leaves the GL error queue dirty
+	// as a matter of course and libmpv is the one that trips over it: mpv's
+	// gl_check_error drains whatever WE left behind, concludes its own texture
+	// allocation failed, and logs
+	//   [libmpv_render] after creating texture: OpenGL error INVALID_FRAMEBUFFER_OPERATION
+	//   Video: no video
+	// on wallpapers that then play perfectly well. Draining here means that
+	// message, when it does appear, is about something this frame did - so the
+	// next person reading a bug report is not chasing a stale error from setup.
+	if (GLenum err = glGetError(); err != GL_NO_ERROR) {
+		std::fprintf(stderr, "WeThread: GL error queue dirty after setup: 0x%x (draining)\n", err);
+		std::fflush(stderr);
+		while (glGetError() != GL_NO_ERROR) {}
 	}
 
 	using clock = std::chrono::steady_clock;
@@ -391,12 +486,8 @@ void WeThread::run() {
 		this->mFrontFence = nullptr;
 		this->mFrontTexture = 0;
 	}
-	glDeleteFramebuffers(1, &targets[0].fbo);
-	glDeleteFramebuffers(1, &targets[1].fbo);
-	glDeleteTextures(1, &targets[0].texture);
-	glDeleteTextures(1, &targets[1].texture);
-	glDeleteRenderbuffers(1, &targets[0].depthStencil);
-	glDeleteRenderbuffers(1, &targets[1].depthStencil);
+	targets[0].destroy();
+	targets[1].destroy();
 	app.reset();
 	// ctx is owned by the surface's QOpenGLContext; just release it from this
 	// thread, don't destroy it.
