@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -42,6 +43,33 @@ public:
 	// Live-adjust the producer frame rate (thread-safe).
 	void setFps(int fps) { this->mFps.store(fps > 0 ? fps : 60); }
 
+	// This wallpaper cannot render and never will: the context could not be made
+	// current, GL did not load, our render targets came back INCOMPLETE, or WE
+	// threw out of setup(). Latched on the WE thread, polled from Qt's render
+	// thread. The surface republishes it as a QML property so the shell can fall
+	// back to the static image - the same graceful degradation web wallpapers
+	// already get - instead of showing a permanently black desktop.
+	//
+	// Deliberately NOT driven by glGetError. WE never clears the GL error queue
+	// (its render path calls glGetError in exactly one place, the screenshot
+	// path), so a stale error survives from frame to frame as a matter of course:
+	// every video wallpaper start on this machine logs
+	// "[libmpv_render] after creating texture: OpenGL error
+	// INVALID_FRAMEBUFFER_OPERATION" - mpv's own gl_check_error draining an
+	// error WE left behind - and then plays perfectly well. Failing on a
+	// non-empty error queue would black out wallpapers that work.
+	[[nodiscard]] bool failed() const { return this->mFailed.load(); }
+
+	// True once ~WeThread has given up waiting for this thread and DETACHED it.
+	// A detached thread is still running, still has its EGLContext current, and
+	// still issues GL through it, so whoever owns that context must not destroy
+	// it. Handed out as a shared_ptr because the answer is only known after the
+	// destructor has run, i.e. when this object no longer exists - the caller
+	// takes a copy BEFORE destroying the thread and reads it after.
+	[[nodiscard]] std::shared_ptr<std::atomic<bool>> detachedFlag() const {
+		return this->mDetached;
+	}
+
 	[[nodiscard]] int width() const { return this->mWidth; }
 	[[nodiscard]] int height() const { return this->mHeight; }
 
@@ -60,6 +88,9 @@ private:
 	std::thread mThread;
 	std::atomic<bool> mStop {false};
 	std::atomic<int> mFps {60};
+	std::atomic<bool> mFailed {false};
+	std::shared_ptr<std::atomic<bool>> mDetached =
+	    std::make_shared<std::atomic<bool>>(false);
 
 	// Double buffer: producer draws mBack, publishes to mFront under mMutex.
 	std::mutex mMutex;
