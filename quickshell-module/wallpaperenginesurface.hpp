@@ -174,7 +174,9 @@ private:
 	QTimer mStallPoll;
 
 	void updateFrameDriver();
-	// Tear down mThread and, only if it was actually joined, mShareContext.
+	// Tear down mThread and mShareContext - unless the WE thread had to be
+	// detached, in which case BOTH are leaked deliberately: it is still running
+	// inside WeThread::run(), on that object, with that context current.
 	void releaseThread();
 };
 

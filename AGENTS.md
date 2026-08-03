@@ -76,9 +76,14 @@ half-written frame.
   and must stay that way.
 - **`mLive` only gates the repaint timer.** It does not stop `WeThread::run()`, which free-runs. It is
   not a power saving; it is what makes suppress/resume symmetrical for the consumer.
-- **The detach path outlives its object.** `~WeThread` gives up on a 3s join and detaches, but the
-  thread is still executing `run()` against `this`. This is a known open defect — see the issue
-  tracker before touching `releaseThread()`.
+- **The detach path outlives its object.** A wallpaper wedged inside WE's `setup()` never observes the
+  stop flag, so the join is bounded and the thread is detached rather than freezing the shell. That
+  thread is still inside `WeThread::run()` — a *member* function using `mMutex`, `mFrontTexture`,
+  `mFrontFence`, `mOnFrame` and the `std::string`s whose `c_str()` WE holds for its whole run. So
+  `WeThread::stop()` returns a verdict, and on `false` `releaseThread()` leaks **both** the GL context
+  and the `WeThread` object on purpose. Do not "tidy" either leak away: a replacement `WeThread` of
+  exactly that size is constructed moments later and will land on a freed address as often as not,
+  at which point the dead wallpaper publishes into the live one's state.
 
 ## Releasing
 

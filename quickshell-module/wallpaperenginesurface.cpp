@@ -69,29 +69,42 @@ void WallpaperEngineSurface::releaseThread() {
 		return;
 	}
 
-	// ~WeThread bounds its join: a wallpaper wedged inside WE's setup() never
+	// stop() bounds its join: a wallpaper wedged inside WE's setup() never
 	// observes the stop flag, so after a few seconds the thread is DETACHED and
-	// left running rather than freezing the shell. Detached does not mean gone -
-	// it still has this QOpenGLContext's EGLContext current and still issues GL
-	// through it. Destroying the context here would therefore pull it out from
-	// under a live thread while that thread is mid-draw, in a context that shares
-	// its object namespace with Qt's. That is a real mechanism for one bad
-	// wallpaper to damage every later one, and it is the mechanism this class's
-	// own header promised did not exist ("must be joined before the context is
-	// destroyed") - which is true of the join path and false of the detach path.
+	// left running rather than freezing the shell. Detached does not mean gone,
+	// and TWO things it is still using have to outlive this call.
 	//
-	// So on the detach path, leak the context on purpose. A wedged WE thread has
-	// already stranded its GL objects and its mpv/SDL state; adding one
-	// EGLContext to that is the cheap half of the trade. The alternative is
-	// undefined behaviour in the shared group.
-	auto detached = this->mThread->detachedFlag();
-	this->mThread.reset();
-	if (detached && detached->load()) {
-		qWarning("WallpaperEngineSurface: WE thread detached; leaking its GL context deliberately");
+	// The EGLContext: it is still current on that thread, which still issues GL
+	// through it. Destroying this QOpenGLContext would pull it out from under a
+	// live thread mid-draw, in a context that shares its object namespace with
+	// Qt's. That is a real mechanism for one bad wallpaper to damage every later
+	// one.
+	//
+	// The WeThread object: the detached thread is inside WeThread::run(), a
+	// MEMBER function that reads mStop/mFps/mScaleMode, locks mMutex, publishes
+	// into mFrontTexture/mFrontFence and notifies through mOnFrame. Destroying
+	// it would run those members' destructors under a live reader, and freeing
+	// it would hand the address back to the allocator - and the very next thing
+	// this class does is construct a REPLACEMENT WeThread of exactly that size,
+	// which lands on that address as often as not. The dead wallpaper would then
+	// publish its texture and its fence into the live one's state.
+	//
+	// So on the detach path, leak both, deliberately. That thread has already
+	// stranded an OS thread, its mpv/SDL state and WE's own GL objects; a few
+	// hundred more bytes, once per wedged wallpaper, is the cheap half of the
+	// trade. The alternative is undefined behaviour in the shared group.
+	if (!this->mThread->stop()) {
+		qWarning(
+		    "WallpaperEngineSurface: WE thread detached; leaking its GL context and thread "
+		    "object deliberately"
+		);
+		(void) this->mThread.release();
 		(void) this->mShareContext.release();
-	} else {
-		this->mShareContext.reset();
+		return;
 	}
+
+	this->mThread.reset();
+	this->mShareContext.reset();
 }
 
 void WallpaperEngineSurface::updateFrameDriver() {

@@ -46,6 +46,23 @@ public:
 	);
 	~WeThread();
 
+	// Stop the render thread and wait, BOUNDED, for it to finish. Returns true
+	// if it actually finished: the object is then quiescent and may be destroyed.
+	// Returns false if the wait timed out and the thread had to be DETACHED - it
+	// is then still executing run(), which is a MEMBER function: it reads
+	// mStop/mFps/mScaleMode, locks mMutex, publishes into mFrontTexture and
+	// mFrontFence, and notifies through mOnFrame. After a false this object must
+	// NEVER be destroyed or freed - leak it, exactly as its GL context already
+	// is (see WallpaperEngineSurface::releaseThread).
+	//
+	// Idempotent: once the thread has been joined or detached, later calls
+	// report the same verdict without waiting again.
+	//
+	// Deliberately not left to the destructor: the verdict is only known from
+	// inside the bounded join, by which point ~WeThread has already committed to
+	// destroying the very members run() is still using.
+	[[nodiscard]] bool stop();
+
 	// Called on Qt's render thread. Returns the GL texture id of the latest
 	// completed frame (valid in the shared context), or 0 if none ready. Inserts
 	// a wait on the producer's fence so sampling is safe.
@@ -70,16 +87,6 @@ public:
 	// error WE left behind - and then plays perfectly well. Failing on a
 	// non-empty error queue would black out wallpapers that work.
 	[[nodiscard]] bool failed() const { return this->mFailed.load(); }
-
-	// True once ~WeThread has given up waiting for this thread and DETACHED it.
-	// A detached thread is still running, still has its EGLContext current, and
-	// still issues GL through it, so whoever owns that context must not destroy
-	// it. Handed out as a shared_ptr because the answer is only known after the
-	// destructor has run, i.e. when this object no longer exists - the caller
-	// takes a copy BEFORE destroying the thread and reads it after.
-	[[nodiscard]] std::shared_ptr<std::atomic<bool>> detachedFlag() const {
-		return this->mDetached;
-	}
 
 	[[nodiscard]] int width() const { return this->mWidth; }
 	[[nodiscard]] int height() const { return this->mHeight; }

@@ -149,18 +149,22 @@ WeThread::WeThread(
 	this->mThread = std::thread([this] { this->run(); });
 }
 
-WeThread::~WeThread() {
+bool WeThread::stop() {
 	this->mStop = true;
-	if (!this->mThread.joinable()) return;
+	// Already stopped once: mThread was moved into the reaper below, so this is
+	// a repeat call and the first attempt's verdict still stands. A detached
+	// thread never becomes joinable again, so waiting a second time cannot
+	// change the answer.
+	if (!this->mThread.joinable()) return !this->mDetached->load();
 
 	// A plain join() here can deadlock the caller. mStop only breaks the render
 	// loop AFTER app->setup() returns; a scene that hangs INSIDE setup() (a bad
 	// pkg, an infinite loop in WE) never observes mStop, so join() would block
-	// forever. This destructor runs on the GUI thread (aboutToQuit) or the render
-	// thread (a project switch), so a wedged WE thread would freeze the whole
-	// shell. Bound the join: hand the thread to a reaper and wait a few seconds;
-	// if WE still has not stopped, detach and let the host carry on (the wedged
-	// thread and its GL context leak, but the shell stays responsive). Normal
+	// forever. This runs on the GUI thread (aboutToQuit) or the render thread (a
+	// project switch), so a wedged WE thread would freeze the whole shell. Bound
+	// the join: hand the thread to a reaper and wait a few seconds; if WE still
+	// has not stopped, detach and let the host carry on (the wedged thread, its
+	// GL context and this object leak, but the shell stays responsive). Normal
 	// shutdowns finish well under the timeout - the render loop sees mStop on its
 	// next frame - so this adds no latency to the common path.
 	auto done = std::make_shared<std::promise<void>>();
@@ -171,15 +175,35 @@ WeThread::~WeThread() {
 	});
 	if (future.wait_for(std::chrono::seconds(3)) == std::future_status::ready) {
 		reaper.join();
-	} else {
-		// Record the detach BEFORE returning. The owner reads this flag through
-		// the shared_ptr it took a copy of, and it decides whether it is still
-		// allowed to destroy the QOpenGLContext whose EGLContext this thread is
-		// holding current. It is not: see WallpaperEngineSurface::releaseThread.
-		std::fprintf(stderr, "WeThread: render thread did not stop in time; detaching\n");
+		return true;
+	}
+
+	// Detached - and that is a fact about THIS OBJECT, not just about the GL
+	// context. run() is still executing, and everything it touches is a member
+	// of this object: mStop, mFps, mScaleMode, mMutex, mFrontTexture,
+	// mFrontFence, mOnFrame. So the owner may neither destroy nor free it, and
+	// may not destroy the QOpenGLContext whose EGLContext the thread still has
+	// current. Saying so is this return value's whole job: see
+	// WallpaperEngineSurface::releaseThread.
+	std::fprintf(stderr, "WeThread: render thread did not stop in time; detaching\n");
+	std::fflush(stderr);
+	this->mDetached->store(true);
+	reaper.detach();
+	return false;
+}
+
+// Correct only once stop() has returned true. It calls stop() itself so the
+// ordinary path (already joined) needs no ceremony at the call site; a false
+// here means the object is being freed out from under a live run(), and there
+// is nothing this side can do about that except say so loudly.
+WeThread::~WeThread() {
+	if (!this->stop()) {
+		std::fprintf(
+		    stderr,
+		    "WeThread: destroyed while its render thread is still running; the owner "
+		    "must leak it instead of destroying it (see WeThread::stop)\n"
+		);
 		std::fflush(stderr);
-		this->mDetached->store(true);
-		reaper.detach();
 	}
 }
 
