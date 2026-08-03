@@ -133,7 +133,8 @@ WeThread::WeThread(
     int height,
     int fps,
     std::string scaleMode,
-    bool audioEnabled
+    bool audioEnabled,
+    std::function<void()> onFrame
 )
     : mDisplay(display)
     , mContext(sharedContext)
@@ -143,6 +144,7 @@ WeThread::WeThread(
     , mWidth(width)
     , mHeight(height)
     , mAudioEnabled(audioEnabled)
+    , mOnFrame(std::move(onFrame))
     , mFps(fps > 0 ? fps : 60) {
 	this->mThread = std::thread([this] { this->run(); });
 }
@@ -236,6 +238,10 @@ void WeThread::run() {
 		targets[0].destroy();
 		targets[1].destroy();
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		// No frame will ever be published, so this is the only wake-up the
+		// consumer gets: without it the failure latch is never read and the shell
+		// never falls back to the static wallpaper.
+		this->notify();
 	};
 
 	// mpv (WE's video-wallpaper backend) hard-requires LC_NUMERIC=C, and refuses
@@ -252,6 +258,7 @@ void WeThread::run() {
 		std::fprintf(stderr, "WeThread: eglMakeCurrent failed: 0x%x\n", eglGetError());
 		std::fflush(stderr);
 		this->mFailed.store(true);
+		this->notify();
 		return;
 	}
 
@@ -263,6 +270,7 @@ void WeThread::run() {
 		std::fflush(stderr);
 		this->mFailed.store(true);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		this->notify();
 		return;
 	}
 	if (glGenFramebuffers == nullptr) {
@@ -270,6 +278,7 @@ void WeThread::run() {
 		std::fflush(stderr);
 		this->mFailed.store(true);
 		eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+		this->notify();
 		return;
 	}
 
@@ -473,6 +482,10 @@ void WeThread::run() {
 		}
 		if (oldSync) glDeleteSync(oldSync);
 		this->mReady = true;
+		// Published: wake the consumer. This, not a clock on the other side, is
+		// what decides when the surface repaints and therefore when the
+		// wallpaper's wl_surface commits.
+		this->notify();
 		back ^= 1;
 
 		auto elapsed = clock::now() - start;
