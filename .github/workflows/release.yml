@@ -74,6 +74,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # `gh release create` shells out to git to resolve the repo, and the
+          # checkout is owned by a different uid than the user this container
+          # runs as - git refuses with "detected dubious ownership" and the
+          # publish fails after the whole build has already succeeded. This is
+          # what killed the v0.1.0 release 34 minutes in.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           gh release create "${{ steps.t.outputs.tag }}" \
             out/qs-wallpaperengine-${{ steps.t.outputs.tag }}-x86_64.tar.zst \
             out/manifest.json out/SHA256SUMS \
