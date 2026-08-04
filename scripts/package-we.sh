@@ -32,6 +32,33 @@ install -m755 "$QS_BIN" "$stage/bin/quickshell"
 # libvk_swiftshader, liblinux-wallpaperengine-lib.so, ...)
 find "$LIB_DIR" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$stage/lib/" \;
 
+# Make the binary find its own bundled libraries.
+#
+# The build bakes an absolute RUNPATH pointing at the builder's own directory
+# (in CI, /__w/qs-wallpaperengine/...). That path exists nowhere else, so the
+# shipped binary could not resolve the libraries sitting right next to it, and
+# every consumer had to work around it - immaterial-impulse rewrote the RUNPATH
+# with patchelf, and where patchelf was missing it exported LD_LIBRARY_PATH
+# instead. That export is inherited by every process the shell spawns, so CEF's
+# bundled libEGL/libGLESv2 shadowed the system ones for every application
+# launched from it.
+#
+# $ORIGIN is resolved by the loader at run time against the directory holding
+# the binary, so bin/quickshell finds ../lib wherever the tarball is unpacked.
+# Setting it here rather than in the build covers the artifact regardless of how
+# quickshell itself was configured, and the staged copy is not running, so this
+# cannot hit the ETXTBSY that makes an in-place repair fail on an installed one.
+patchelf --set-rpath '$ORIGIN/../lib' "$stage/bin/quickshell"
+
+# Refuse to ship a binary that still names a builder-local path: this is the
+# whole defect, it survived every release so far, and it is invisible in the
+# artifact unless something looks.
+staged_rpath="$(patchelf --print-rpath "$stage/bin/quickshell")"
+case "$staged_rpath" in
+  '$ORIGIN/../lib') ;;
+  *) echo "package-we.sh: refusing to ship RUNPATH '$staged_rpath'" >&2; exit 1;;
+esac
+
 # manifest.json (hand-built JSON; values are our own, no external interpolation)
 files_json="$(cd "$stage" && find bin lib -type f | sort | sed 's/.*/"&"/' | paste -sd, -)"
 cat > "$OUT/manifest.json" <<JSON
