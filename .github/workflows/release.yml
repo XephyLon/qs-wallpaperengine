@@ -14,39 +14,170 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The AUR steps below compile linux-wallpaperengine and Quickshell from
+    # source; a mirror that accepts the connection and then stalls would
+    # otherwise sit here burning the runner's 6h default before anyone noticed.
+    timeout-minutes: 120
     container:
       image: archlinux:latest
     steps:
       - name: Resolve tag
         id: t
-        run: echo "tag=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          # GITHUB_REF_NAME is ALWAYS set - on workflow_dispatch it is the branch
+          # the run was started from, not the tag that was typed in. The old
+          # `${GITHUB_REF_NAME:-<input>}` therefore never reached the input, so a
+          # manual run would happily build, package and publish a release
+          # literally named "main" (package-we.sh's tag pattern accepts it).
+          # Prefer the explicit input; fall back to the ref name, which on the
+          # `v*` tag-push path is the tag.
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          # Matched against the SAME character class package-we.sh enforces
+          # (^[A-Za-z0-9._-]+$), not merely "starts with a v". `case "$tag" in v*)`
+          # accepted anything with a leading v - newlines and shell metacharacters
+          # included - so `v; rm -rf /` passed here at second 5 and was rejected by
+          # package-we.sh at minute 35, which is precisely the outcome this step
+          # exists to prevent. The newline case is worse than late: both writes
+          # below are `name=value` appends to $GITHUB_OUTPUT / $GITHUB_ENV, so a
+          # multi-line workflow_dispatch input injects arbitrary environment
+          # variables into every later step of a job that holds a contents:write
+          # token.
+          if [[ ! "$tag" =~ ^v[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::refusing to build tag '$tag': release tags are v + [A-Za-z0-9._-]"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # Exported for every later step so the tag is never spliced into the
+          # middle of a shell command line by the expression evaluator.
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      # Checkout runs FIRST, before anything touches the network. The three
+      # dependency steps below make four network calls and cost the better part
+      # of an hour between them; a checkout failure used to surface only after
+      # all of that had already been paid for.
+      #
+      # This action needs node and the container has none: node comes from the
+      # runner's mounted externals volume, not from pacman. That is already
+      # proven here - nodejs is not in the pacman list below and checkout@v4 has
+      # always worked in this container - which is exactly why it is safe to run
+      # it before a single package has been installed.
+      #
+      # Consequence to know about: archlinux:latest ships no git (that is why the
+      # pacman line installs it), so at this point checkout takes its documented
+      # fallback of downloading the repo over the REST API and the workspace has
+      # NO .git afterwards. Nothing here needs one - bootstrap.sh only ever runs
+      # git against its own clones under build/, no script calls git describe or
+      # rev-parse on this repo, there are no submodules, and the publish steps
+      # pin the repository with GH_REPO instead of letting gh guess it from a
+      # git remote.
+      - uses: actions/checkout@v4
+
+      - name: Retry helper
+        run: |
+          # Every dependency step below talks to either the Arch mirrors or the
+          # AUR, and a single 5xx or rate-limit from either used to throw away
+          # the whole job. A plain bash loop rather than a marketplace retry
+          # action on purpose: this job holds a contents:write token, so a third
+          # party action is one more thing to pin by SHA and re-audit, and a
+          # helper written here can be grepped - and actually run - by
+          # test_release_yaml.sh.
+          #
+          # A retry is only ever correct around an IDEMPOTENT command; every call
+          # site below is written so that a second attempt starts from a clean
+          # slate. Attempts are capped so that a genuinely broken command (bad
+          # package name, compile error in an AUR build) still fails the step
+          # promptly instead of looping for an hour.
+          cat > /usr/local/bin/ci-retry <<'SH'
+          #!/usr/bin/env bash
+          # ci-retry <command> [args...] - run it, retry it if it fails.
+          # Tunables, both from the environment: CI_RETRY_TRIES (default 3) and
+          # CI_RETRY_DELAY (default 20s, multiplied by the attempt number so the
+          # wait grows). There is no `--` separator: the command starts at $1.
+          # Deliberately no `set -e` - the whole point is to survive a failing "$@".
+          set -uo pipefail
+          tries="${CI_RETRY_TRIES:-3}"
+          delay="${CI_RETRY_DELAY:-20}"
+          for i in $(seq 1 "$tries"); do
+            "$@" && exit 0
+            rc=$?
+            if [ "$i" -ge "$tries" ]; then
+              echo "ci-retry: '$*' failed $tries times, last rc=$rc" >&2
+              exit "$rc"
+            fi
+            echo "ci-retry: attempt $i/$tries failed (rc=$rc), retrying in $((delay * i))s" >&2
+            sleep "$((delay * i))"
+          done
+          # Reaching here means `seq` produced no iterations at all, i.e.
+          # CI_RETRY_TRIES was set to something that is not a positive integer.
+          # Without this the script would fall off the end and exit 0 having
+          # never run "$@" once, so a dependency install that never happened
+          # would look like a success and the failure would surface much later
+          # as a missing compiler. Fail loudly instead.
+          echo "ci-retry: CI_RETRY_TRIES='$tries' is not a positive integer" >&2
+          exit 1
+          SH
+          chmod 755 /usr/local/bin/ci-retry
+          # Every later step invokes this by bare name. /usr/local/bin is on the
+          # default PATH Docker gives a container and archlinux:latest does not
+          # override it - but if that ever stops being true, the four call sites
+          # below would each fail with a bare "ci-retry: command not found" and
+          # the cause would be anything but obvious. Prove it resolves now, in
+          # the cheapest step of the job, rather than inferring it from a
+          # confusing failure in the middle of a dependency install.
+          command -v ci-retry >/dev/null \
+            || { echo "::error::/usr/local/bin is not on PATH: $PATH"; exit 1; }
 
       - name: Base tooling
         run: |
-          pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
+          ci-retry pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
             qt6-base qt6-declarative qt6-wayland github-cli
-          # unprivileged build user (makepkg/yay refuse to run as root)
+          # unprivileged build user (makepkg/yay refuse to run as root). Only the
+          # pacman call above is retried: useradd and the sudoers append are not
+          # idempotent, so a second pass would die on "user 'build' already
+          # exists" and turn a recoverable mirror blip into a hard failure.
           useradd -m build && echo "build ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          # git exists only as of this step, so this is the earliest point the
+          # guard can be set - and it is set here rather than next to the publish
+          # so it covers every later git and gh call. It is needed because the
+          # workspace is chowned to `build` in Build below while every later git
+          # and gh call runs as root: git then refuses with "detected dubious
+          # ownership" and the publish dies after the whole build has already
+          # succeeded. That is what killed the v0.1.0 release 34 minutes in.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: yay
         run: |
-          sudo -u build bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay-bin.git \
+          # rm -rf first: `git clone` refuses a non-empty destination, so without
+          # it a second ci-retry attempt could never succeed and the retry would
+          # be pure decoration.
+          ci-retry sudo -u build bash -c 'cd /tmp && rm -rf yay-bin \
+            && git clone https://aur.archlinux.org/yay-bin.git \
             && cd yay-bin && makepkg -si --noconfirm'
 
       - name: Runtime + build deps
         run: |
-          # /opt/linux-wallpaperengine (runtime) + its makedepends, full build:
-          sudo -u build yay -S --noconfirm --needed linux-wallpaperengine-git
-          # Quickshell makedepends only (no package build): extract from PKGBUILD
-          sudo -u build bash -c 'cd /tmp && yay -G quickshell-git && cd quickshell-git \
+          # /opt/linux-wallpaperengine (runtime) + its makedepends, full build.
+          # Two attempts only: this one compiles, so retrying a genuine build
+          # break costs another quarter of an hour for nothing. The transient
+          # case we are buying cover for is the AUR lookup at the front of it.
+          CI_RETRY_TRIES=2 ci-retry sudo -u build \
+            yay -S --noconfirm --needed linux-wallpaperengine-git
+          # Quickshell makedepends only (no package build): extract from PKGBUILD.
+          # rm -rf again - `yay -G` clones into ./quickshell-git and fails if the
+          # directory is already there, which a retry would otherwise guarantee.
+          ci-retry sudo -u build bash -c 'cd /tmp && rm -rf quickshell-git \
+            && yay -G quickshell-git && cd quickshell-git \
             && source PKGBUILD && sudo pacman -S --noconfirm --needed --asdeps \
                "${makedepends[@]}" "${depends[@]}"'
-
-      - uses: actions/checkout@v4
 
       - name: Build
         id: build
         run: |
+          # The workspace is checked out as root but built as `build`; the
+          # safe.directory guard set in Base tooling is what keeps root's later
+          # git and gh calls working across this ownership split.
           chown -R build:build "$GITHUB_WORKSPACE"
           eval "$(sudo -u build env REPO_ROOT="$GITHUB_WORKSPACE" bash scripts/build-we.sh)"
           echo "qs_bin=$QS_BIN"       >> "$GITHUB_OUTPUT"
@@ -56,32 +187,168 @@ jobs:
         run: |
           mkdir -p out
           WE_QT_VERSION="$(pacman -Q qt6-base | awk '{print $2}')" \
-          WE_COMMIT="${GITHUB_SHA}" WE_BUILT_AT="build-${{ steps.t.outputs.tag }}" \
+          WE_COMMIT="${GITHUB_SHA}" WE_BUILT_AT="build-${TAG}" \
           bash scripts/package-we.sh \
             --qs-bin "${{ steps.build.outputs.qs_bin }}" \
             --lib-dir "${{ steps.build.outputs.we_lib_dir }}" \
-            --tag "${{ steps.t.outputs.tag }}" --out out
+            --tag "$TAG" --out out
+
+      - name: Record what this build was actually made of
+        run: |
+          # Neither AUR -git package can be pinned: `yay -S` always builds
+          # upstream HEAD and has no revision argument, and pacman has no "as of
+          # date D" mode short of repointing the mirrorlist at
+          # archive.archlinux.org and then fighting partial upgrades. What
+          # actually goes INTO the tarball is already pinned - bootstrap.sh
+          # hard-codes QS_COMMIT and WE_COMMIT - so what genuinely floats between
+          # two runs of the same tag is the toolchain and the /opt runtime the
+          # artifact was tested against. Record both, so that "why did v0.3.0
+          # behave differently" is answerable from the release itself and not
+          # from a job log that expires in 90 days.
+          #
+          # Every lookup here is best-effort on purpose. Provenance metadata must
+          # never be the thing that fails a 35-minute build, and this is the ONLY
+          # place in this job where a non-zero exit is swallowed - the publish
+          # steps below must never do it.
+          pin() { sed -n "s/^$1=\"\\([^\"]*\\)\".*/\\1/p" bootstrap.sh; }
+          head_of() { sudo -u build git -C "build/$1" rev-parse HEAD 2>/dev/null || echo unknown; }
+          {
+            echo "tag: $TAG"
+            echo "commit: $GITHUB_SHA"
+            echo "container: archlinux:latest"
+            echo "we_pin:  $(pin WE_COMMIT)"
+            echo "qs_pin:  $(pin QS_COMMIT)"
+            echo "we_head: $(head_of linux-wallpaperengine)"
+            echo "qs_head: $(head_of quickshell)"
+            echo "--- pacman -Q ---"
+            pacman -Q
+          } > out/build-env.txt
+          # bootstrap.sh's WE_COMMIT is written to match the AUR package (the
+          # comment next to it reads "linux-wallpaperengine-git r627.b016d7d1").
+          # Once the AUR moves ahead, the bundled liblinux-wallpaperengine-lib.so
+          # and the /opt runtime it loads against no longer come from the same
+          # commit - an ABI hazard that shows up as a crash on a user's machine,
+          # not here. Warn loudly; do not refuse to cut the release. Making this
+          # fatal would block every release the moment the AUR moves, and a
+          # release pipeline that refuses to release is not a change to make
+          # silently: it is `exit 1` in the `*)` arm if that is ever wanted.
+          we_pkg="$(pacman -Q linux-wallpaperengine-git 2>/dev/null || echo unknown)"
+          we_pin="$(pin WE_COMMIT)"
+          echo "we_pkg:  $we_pkg" >> out/build-env.txt
+          # The empty-pin guard is not paranoia: `case "$we_pkg" in *""*)` matches
+          # EVERY string, so a pin that failed to extract - someone renames the
+          # variable, or switches bootstrap.sh to single quotes, either of which
+          # the sed above is sensitive to - turns this check into a permanent
+          # "all good" and the ABI mismatch it exists to catch ships to users as
+          # a crash. A check that cannot fail is worse than no check, because it
+          # is believed.
+          if [ -z "$we_pin" ]; then
+            echo "::warning::could not read WE_COMMIT out of bootstrap.sh;" \
+                 "the WE ABI drift check did not run"
+          else
+            case "$we_pkg" in
+              *"$we_pin"*) ;;
+              *) echo "::warning::installed $we_pkg does not contain bootstrap.sh" \
+                      "WE_COMMIT=$we_pin - the bundled WE lib and /opt may disagree";;
+            esac
+          fi
+
+      - name: Upload the build output as a workflow artifact
+        # !cancelled() rather than the default success(): this step is the only
+        # copy of a 35-minute build that exists before the release is published,
+        # and it has to survive a Package that got partway (package-we.sh writes
+        # manifest.json, then the tarball, then SHA256SUMS) or a provenance step
+        # that tripped over something. Failures AFTER this point (smoke test,
+        # publish) are already covered by position - the upload has run by then,
+        # which is the whole reason it sits here and not at the end of the job.
+        # always() would defeat cancellation, so it is deliberately not that.
+        if: ${{ !cancelled() }}
+        # And a failure of the upload ITSELF must not take the release with it.
+        # Without this, a 503 from the artifact service or an org over its Actions
+        # storage quota - on the largest transfer in the job, several hundred MB -
+        # fails this step, and Smoke test / Create / Publish all default to
+        # success() and are skipped. A completed, correct, packaged build would
+        # then never be published for its tag and the only recovery would be
+        # another 35-minute run: the exact failure this whole section exists to
+        # prevent, reintroduced by the safety net. The artifact is a safety net,
+        # not a deliverable, so it fails soft.
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          # Same node-from-the-runner story as checkout@v4 above, and no extra
+          # requirement beyond the outbound HTTPS this job already needs.
+          name: qs-wallpaperengine-${{ steps.t.outputs.tag }}
+          path: out/
+          # A failed Build leaves no out/ at all; warn instead of stacking a red
+          # artifact step on top of the real failure.
+          if-no-files-found: warn
+          # Re-running the failed job reuses the workflow run, and v4 artifact
+          # names are unique per run - without this the recovery path itself
+          # 409s on "an artifact with this name already exists".
+          overwrite: true
+          # The payload is an already-zstd-19 tarball; zipping it again buys
+          # nothing and costs minutes on a several-hundred-MB upload.
+          compression-level: 0
+          retention-days: 14
 
       - name: Smoke test the packaged binary
         run: |
           d="$(mktemp -d)"
           tar --use-compress-program=unzstd \
-            -xf out/qs-wallpaperengine-${{ steps.t.outputs.tag }}-x86_64.tar.zst -C "$d"
+            -xf "out/qs-wallpaperengine-${TAG}-x86_64.tar.zst" -C "$d"
           LD_LIBRARY_PATH="$d/lib:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine" \
             "$d/bin/quickshell" --version
 
-      - name: Publish release
+      - name: Create the release (draft) if it does not exist yet
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh normally resolves the repo by shelling out to git in the checkout.
+          # That is the resolution that failed for v0.1.0 34 minutes in, and with
+          # checkout now running before git is installed there may not even be a
+          # .git to resolve from. Naming the repo outright removes the guess.
+          # GH_TOKEN is deliberately NOT hoisted to job level: the dependency
+          # steps build arbitrary AUR PKGBUILDs, and handing those a
+          # contents:write token would be a real supply-chain exposure.
+          GH_REPO: ${{ github.repository }}
         run: |
-          # `gh release create` shells out to git to resolve the repo, and the
-          # checkout is owned by a different uid than the user this container
-          # runs as - git refuses with "detected dubious ownership" and the
-          # publish fails after the whole build has already succeeded. This is
-          # what killed the v0.1.0 release 34 minutes in.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          gh release create "${{ steps.t.outputs.tag }}" \
-            out/qs-wallpaperengine-${{ steps.t.outputs.tag }}-x86_64.tar.zst \
-            out/manifest.json out/SHA256SUMS \
-            --title "${{ steps.t.outputs.tag }}" \
-            --notes "Prebuilt WE-capable Quickshell (x86_64). Installer verifies SHA256SUMS and falls back to a source build on any mismatch."
+          # `gh release create` is not re-runnable - it exits non-zero with
+          # "release already exists" on the second call. That is what turned
+          # recovery from a transient 5xx on the last asset into "delete the
+          # release by hand, then pay another 35 minutes". Ask first, create only
+          # if absent, and let a real create failure fail the step: the `if`
+          # CONDITION is exempt from errexit but the else branch is not, and
+          # there is no `|| true` here for exactly that reason.
+          #
+          # Created as a DRAFT so that a failure in the upload below never leaves
+          # a user-visible release with assets missing. The installer resolves
+          # this tag and expects the tarball, manifest.json and SHA256SUMS all to
+          # be there; a half-published release is worse than no release.
+          #
+          # `gh release view` finds a draft by its pending tag, so a re-run
+          # reuses the draft this step left behind rather than trying to create
+          # it twice. Release notes are set on create only, so a re-run does not
+          # clobber notes someone has edited by hand.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists - reusing it"
+          else
+            gh release create "$TAG" --draft --title "$TAG" \
+              --notes "Prebuilt WE-capable Quickshell (x86_64). Installer verifies SHA256SUMS and falls back to a source build on any mismatch."
+          fi
+
+      - name: Upload the assets and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # --clobber is what makes a re-run converge: without it, re-uploading
+          # an asset that already made it up fails the step, so a 5xx on the last
+          # of four assets could only be recovered by deleting the release by
+          # hand. Retried as well, because one flaky asset upload should never
+          # cost a rebuild.
+          ci-retry gh release upload "$TAG" --clobber \
+            "out/qs-wallpaperengine-${TAG}-x86_64.tar.zst" \
+            out/manifest.json out/SHA256SUMS out/build-env.txt
+          # Only now does the release become visible. On a re-run of an already
+          # published release this is a no-op PATCH, which is exactly the
+          # convergence property the rest of this step is built for.
+          gh release edit "$TAG" --draft=false
