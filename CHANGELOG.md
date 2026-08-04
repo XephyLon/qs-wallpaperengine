@@ -3,6 +3,78 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
+## [Unreleased]
+
+### Added
+- `WallpaperEngineSurface.occluded` — set by the shell when a fullscreen window
+  covers **that** output. While it is set the renderer idles at a few frames a
+  second and publishes nothing, so the surface stops repainting and the window
+  stops committing; clearing it produces a fresh frame within a frame or two. It
+  is a live toggle: unlike `scaleMode` / `audioEnabled` it does not reload the
+  wallpaper.
+
+  **This supersedes the fullscreen-pause entry under 0.1.0 below**, including its
+  claim that "the shell cannot own this policy itself". It can, and it is the
+  only side that can: linux-wallpaperengine's detector has no concept of an
+  output — its toplevel output-enter/output-leave handlers are empty stubs — so
+  `anythingFullscreen()` is one flat global count, while the shell runs one
+  surface per output. The embed now disables WE's pause outright and the shell
+  decides, per output. A shell that never sets `occluded` gets no fullscreen
+  pausing at all; that is the deliberate default.
+
+  Scope, so nobody sizes a power budget off it: `occluded` does not reach mpv. A
+  video wallpaper keeps decoding at the file's frame rate, because only WE's own
+  `setPause()` stops that and it is private to `WallpaperApplication`. What the
+  flag drops is everything downstream of the decode — the blit, the fence, the
+  publish, the repaint and the `wl_surface` commit — plus fifteen sixteenths of
+  the render.
+
+### Fixed
+- Reverted `--fullscreen-pause-only-active` to `--no-fullscreen-pause`. The
+  justification is **correctness, not cost**: WE's detector is output-blind (its
+  toplevel output-enter/leave handlers are empty stubs), so `anythingFullscreen()`
+  is one flat process-wide count while the shell runs one renderer per output — a
+  game on one monitor froze the wallpapers on all the others, and no spelling of
+  the flag fixes that, because the predicate is not where the bug is.
+
+  The flag is also not a predicate knob: it decides whether a detector is
+  constructed at all, and any spelling leaving `pauseOnFullscreen` set builds the
+  real Wayland detector, which opens a second `wl_display_connect()` per wallpaper
+  thread and does a `wl_display_roundtrip()` inside every `anythingFullscreen()` —
+  once per frame, since `WallpaperApplication::render()` asks each time. That is
+  recorded as a **secondary, unmeasured** consideration: Wayland message traffic is
+  cheap in CPU terms and the per-frame round-trip has never been isolated as a
+  measurable cost here. Do not cite it as the win.
+- `failed` never cleared when a reload of the *same* project succeeded, and a
+  late verdict could latch onto the next project. Verdicts now carry a load
+  generation and disown themselves if it has moved on; `rendered` and `failed`
+  are both retired on every rebuild (a `scaleMode` or `audioEnabled` change and a
+  GL context loss included), and the two per-load latches are re-armed against
+  the generation rather than against the rebuild — a `projectPath` that goes
+  empty and comes straight back bumps twice without rebuilding anything, and used
+  to leave `rendered` false for the rest of the session over a wallpaper that was
+  rendering perfectly.
+- A project switch kept the old scene-graph node alive after its GL texture had
+  been deleted. The node holds a bare GL texture *name*; `releaseThread()` joins
+  the WE thread, whose epilogue `glDeleteTextures` it inside the share group Qt
+  is still drawing from, and the next `glGenTextures` hands the same name
+  straight back — most likely to the incoming thread's own `targets[0]`, else to
+  a Qt atlas or layer texture (the "widget's cached layer drawn fullscreen"
+  symptom). The node is now dropped on every rebuild path, not only the
+  context-change one.
+- `glWaitSync` could name a fence the producer had already deleted, which is
+  `GL_INVALID_VALUE` and *no wait at all* — a torn wallpaper frame with nothing
+  in any log to explain it, because the render loop deliberately never reads the
+  GL error queue after setup. The read and the wait are now one critical section.
+- Release runs no longer throw away a 35-minute build. `out/` is uploaded as a
+  workflow artifact before anything that can still fail (and the upload itself
+  is `continue-on-error`, so a flaky artifact service cannot block the publish);
+  every network call is wrapped in a bounded `ci-retry`; the release is created
+  as a draft and flipped to published only after its assets are up, so a re-run
+  converges instead of demanding a hand-deleted release; checkout runs before the
+  dependency install; and the tag is validated against `package-we.sh`'s own
+  character class in the first step rather than at minute 35.
+
 ## [0.2.1] — 2026-08-04
 
 ### Fixed
@@ -90,6 +162,13 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
   screen. (The shell cannot own this policy itself: its own suppression stops
   Qt drawing the surface and `live` only gates the repaint timer, neither of
   which reaches the WE thread — only WE's `setPause()` reaches mpv.)
+
+  **Superseded — see `occluded` under [Unreleased].** Two things above turned out
+  to be wrong. `--fullscreen-pause-only-active` narrows the count to *activated*
+  toplevels but the count is still global and still output-blind, so a game
+  focused on one monitor went on freezing the wallpapers on the other two. And
+  the shell *can* own the policy: `occluded` reaches the WE thread. The embed now
+  passes `--no-fullscreen-pause` and the shell decides, per output.
 - Wallpaper black-outs and wedged (permanently black) video wallpapers while a
   game runs: Hyprland's fullscreen direct-scanout recreates Qt's scene-graph
   GL contexts several times a minute in a game session, and every recreation
