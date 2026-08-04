@@ -16,8 +16,14 @@ command -v patchelf >/dev/null || { echo "SKIP: patchelf not installed"; exit 0;
 # rather than a path and there is nothing to copy.
 cp "$(command -v env)" "$tmp/qsbin/quickshell"; chmod +x "$tmp/qsbin/quickshell"
 patchelf --set-rpath '/__w/qs-wallpaperengine/build/output' "$tmp/qsbin/quickshell"
-printf 'x' > "$tmp/welib/liblinux-wallpaperengine-lib.so"
-printf 'y' > "$tmp/welib/libcef.so"
+# A real ELF too, carrying its own builder-local RUNPATH. Fixing only the
+# binary is not enough - DT_RUNPATH is not transitive, so this library resolves
+# libcef.so beside it through *this* path, not the executable's.
+cp "$(command -v env)" "$tmp/welib/liblinux-wallpaperengine-lib.so"
+patchelf --set-rpath '/__w/qs-wallpaperengine/build/lib' "$tmp/welib/liblinux-wallpaperengine-lib.so"
+# Also a real ELF: packaging rewrites every bundled .so, so a stub byte would
+# only prove patchelf rejects garbage.
+cp "$(command -v env)" "$tmp/welib/libcef.so"
 
 WE_QT_VERSION=6.11.1-1 WE_COMMIT=deadbeef \
   bash "$s" --qs-bin "$tmp/qsbin/quickshell" --lib-dir "$tmp/welib" \
@@ -44,6 +50,16 @@ rp="$(patchelf --print-rpath "$x/bin/quickshell")"
   || { echo "FAIL: shipped RUNPATH is '$rp', expected \$ORIGIN/../lib"; exit 1; }
 case "$rp" in
   /*|*:/*) echo "FAIL: shipped RUNPATH contains an absolute builder path: $rp"; exit 1;;
+esac
+
+# And so must the bundled libraries. DT_RUNPATH is not transitive: the
+# executable's RUNPATH does not resolve a library's own dependencies, so
+# liblinux-wallpaperengine-lib.so finds libcef.so beside it only through its own.
+lrp="$(patchelf --print-rpath "$x/lib/liblinux-wallpaperengine-lib.so")"
+[[ "$lrp" == '$ORIGIN:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine' ]] \
+  || { echo "FAIL: shipped library RUNPATH is '$lrp'"; exit 1; }
+case "$lrp" in
+  /__w/*|*/__w/*) echo "FAIL: library RUNPATH still names the builder: $lrp"; exit 1;;
 esac
 
 # And packaging must refuse rather than ship a bad one. Re-run with a patchelf

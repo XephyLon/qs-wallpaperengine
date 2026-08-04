@@ -18,9 +18,12 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
   shell spawns, so CEF's bundled `libEGL`/`libGLESv2` shadowed the system ones
   for every application launched from it.
 
-  Packaging now sets `$ORIGIN/../lib`, which the loader resolves against the
-  directory holding the binary, and **refuses to produce a tarball** whose
-  RUNPATH is anything else. This shipped in every release through 0.2.2 and is
+  Packaging now sets `$ORIGIN/../lib` on the binary and
+  `$ORIGIN:/opt/linux-wallpaperengine/...` on every bundled library, and
+  **refuses to produce a tarball** whose RUNPATHs are anything else. Both are
+  needed: `DT_RUNPATH` is not transitive, so the executable's path resolves only
+  its own direct dependencies - `liblinux-wallpaperengine-lib.so` finds
+  `libcef.so` beside it through *its* path, which was also the builder's. This shipped in every release through 0.2.2 and is
   invisible in the artifact unless something looks, so the check lives where the
   artifact is made.
 

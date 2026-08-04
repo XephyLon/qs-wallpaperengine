@@ -50,14 +50,37 @@ find "$LIB_DIR" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$stage/lib/" \
 # cannot hit the ETXTBSY that makes an in-place repair fail on an installed one.
 patchelf --set-rpath '$ORIGIN/../lib' "$stage/bin/quickshell"
 
-# Refuse to ship a binary that still names a builder-local path: this is the
+# The bundled libraries need the same treatment, and fixing only the binary is
+# not enough: DT_RUNPATH is NOT transitive. The executable's RUNPATH resolves
+# the executable's own direct dependencies and nothing beyond them, so
+# liblinux-wallpaperengine-lib.so looks up libcef.so - sitting right beside it -
+# through *its own* RUNPATH, which is another builder path. Repairing just the
+# binary downstream left the shell still unable to start unaided, and the
+# LD_LIBRARY_PATH fallback (which IS transitive, hence why it papered over this)
+# stayed in place.
+#
+# $ORIGIN so a library finds its siblings, then /opt/linux-wallpaperengine for
+# what is not bundled at all (libkissfft-float.so.131 comes from the AUR runtime
+# package, not from this build).
+for so in "$stage"/lib/*.so*; do
+  [[ -f "$so" ]] || continue
+  patchelf --set-rpath '$ORIGIN:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine' "$so"
+done
+
+# Refuse to ship anything that still names a builder-local path: this is the
 # whole defect, it survived every release so far, and it is invisible in the
 # artifact unless something looks.
-staged_rpath="$(patchelf --print-rpath "$stage/bin/quickshell")"
-case "$staged_rpath" in
-  '$ORIGIN/../lib') ;;
-  *) echo "package-we.sh: refusing to ship RUNPATH '$staged_rpath'" >&2; exit 1;;
-esac
+check_rpath(){ # $1=file, $2=expected
+  local got; got="$(patchelf --print-rpath "$1")"
+  [[ "$got" == "$2" ]] && return 0
+  echo "package-we.sh: refusing to ship $(basename "$1") with RUNPATH '$got'" >&2
+  return 1
+}
+check_rpath "$stage/bin/quickshell" '$ORIGIN/../lib' || exit 1
+for so in "$stage"/lib/*.so*; do
+  [[ -f "$so" ]] || continue
+  check_rpath "$so" '$ORIGIN:/opt/linux-wallpaperengine/lib:/opt/linux-wallpaperengine' || exit 1
+done
 
 # manifest.json (hand-built JSON; values are our own, no external interpolation)
 files_json="$(cd "$stage" && find bin lib -type f | sort | sed 's/.*/"&"/' | paste -sd, -)"
