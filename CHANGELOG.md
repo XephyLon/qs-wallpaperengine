@@ -3,6 +3,32 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
+## [0.2.1] — 2026-08-04
+
+### Fixed
+- A wallpaper that wedged inside WE's `setup()` could make a *later*, healthy
+  wallpaper publish frames into freed memory. When the bounded join times out
+  the thread is detached rather than freezing the shell — but `releaseThread()`
+  then took that verdict from the object and destroyed it in the same statement.
+  The detached thread is still inside `WeThread::run()`, a member function: it
+  reads `mStop`, `mFps` and `mScaleMode`, locks `mMutex`, publishes into
+  `mFrontTexture` and `mFrontFence`, notifies through `mOnFrame`, and WE holds
+  `c_str()` pointers into its `std::string`s for the whole run. Freeing the
+  object ran those destructors under a live reader and returned the address to
+  the allocator — and the very next thing this class does is construct a
+  replacement `WeThread` of exactly that size, which lands on the same address
+  as often as not.
+
+  The verdict is only knowable from inside the join, by which point the
+  destructor has already committed to destroying what `run()` is using, so the
+  join is hoisted into `[[nodiscard]] bool WeThread::stop()`. True means the
+  thread finished and the object is quiescent; false means it was detached, and
+  the caller leaks **both** the GL context and the `WeThread` on purpose. The
+  earlier context leak protected the `EGLContext` and missed that the object
+  holding the thread's state was freed alongside it. Costs a few hundred bytes
+  and an OS thread per wedged wallpaper — the same bound the context leak
+  already carried.
+
 ## [0.2.0] — 2026-08-03
 
 ### Added
