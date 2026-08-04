@@ -131,8 +131,12 @@ jobs:
 
       - name: Base tooling
         run: |
+          # patchelf: package-we.sh rewrites the shipped binary's RUNPATH to
+          # $ORIGIN/../lib so it can find its own bundled libraries. It is not
+          # part of base-devel, and packaging now refuses to produce a tarball
+          # without it rather than shipping a builder-local path (#12).
           ci-retry pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
-            qt6-base qt6-declarative qt6-wayland github-cli
+            patchelf qt6-base qt6-declarative qt6-wayland github-cli
           # unprivileged build user (makepkg/yay refuse to run as root). Only the
           # pacman call above is retried: useradd and the sudoers append are not
           # idempotent, so a second pass would die on "user 'build' already

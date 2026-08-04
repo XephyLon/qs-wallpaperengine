@@ -72,8 +72,12 @@ jobs:
           # PyYAML. Without it the script's `python3 -c 'import yaml'` line dies
           # on ModuleNotFoundError and it reports "FAIL: invalid YAML" - blaming
           # a file that is perfectly well-formed.
+          # patchelf because test_package_we.sh exercises the RUNPATH rewrite on
+          # a real ELF. Without it that check SKIPs, which reads as success -
+          # the same "green while covering nothing" failure mode as the missing
+          # python-yaml above.
           ci-retry pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
-            python-yaml qt6-base qt6-declarative qt6-wayland
+            python-yaml patchelf qt6-base qt6-declarative qt6-wayland
           useradd -m build && echo "build ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
