@@ -68,10 +68,26 @@ jobs:
 
       - name: Base tooling
         run: |
+          # python-yaml because test_release_yaml.sh parses the workflow with
+          # PyYAML. Without it the script's `python3 -c 'import yaml'` line dies
+          # on ModuleNotFoundError and it reports "FAIL: invalid YAML" - blaming
+          # a file that is perfectly well-formed.
           ci-retry pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
-            qt6-base qt6-declarative qt6-wayland
+            python-yaml qt6-base qt6-declarative qt6-wayland
           useradd -m build && echo "build ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # Before yay and the AUR builds, not after. This check costs a second; the
+      # two steps below cost ~20 minutes. Running it last meant a one-second
+      # failure was only reported once the expensive work had already been paid
+      # for, and the Build step it was gating never ran at all.
+      - name: Workflow self-test
+        run: |
+          if [[ -f .github/workflows/test_release_yaml.sh ]]; then
+            bash .github/workflows/test_release_yaml.sh
+          else
+            echo "no test_release_yaml.sh on this branch; skipping"
+          fi
 
       - name: yay
         run: |
@@ -87,16 +103,6 @@ jobs:
             && yay -G quickshell-git && cd quickshell-git \
             && source PKGBUILD && sudo pacman -S --noconfirm --needed --asdeps \
                "${makedepends[@]}" "${depends[@]}"'
-
-      - name: Workflow self-test
-        run: |
-          # Cheap and catches a broken release.yml before a tag push does, but
-          # only exists on branches that carry it.
-          if [[ -f .github/workflows/test_release_yaml.sh ]]; then
-            bash .github/workflows/test_release_yaml.sh
-          else
-            echo "no test_release_yaml.sh on this branch; skipping"
-          fi
 
       - name: Build
         id: build
