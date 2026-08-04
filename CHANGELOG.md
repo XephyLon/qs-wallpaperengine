@@ -3,6 +3,27 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
+## [Unreleased]
+
+### Fixed
+- **The shipped binary could not find its own bundled libraries.** Release
+  tarballs carried the builder's own directory as their RUNPATH — in CI,
+  `/__w/qs-wallpaperengine/...` — a path that exists on no user's machine, so
+  `bin/quickshell` could not resolve the `lib/*.so` sitting beside it in the very
+  same archive ([#12](https://github.com/XephyLon/qs-wallpaperengine/issues/12)).
+
+  Consumers had to work around it, and the workaround leaked: immaterial-impulse
+  rewrote the RUNPATH with `patchelf`, and where `patchelf` was missing it
+  exported `LD_LIBRARY_PATH` instead — which is inherited by every process the
+  shell spawns, so CEF's bundled `libEGL`/`libGLESv2` shadowed the system ones
+  for every application launched from it.
+
+  Packaging now sets `$ORIGIN/../lib`, which the loader resolves against the
+  directory holding the binary, and **refuses to produce a tarball** whose
+  RUNPATH is anything else. This shipped in every release through 0.2.2 and is
+  invisible in the artifact unless something looks, so the check lives where the
+  artifact is made.
+
 ## [0.2.2] — 2026-08-04
 
 ### Added

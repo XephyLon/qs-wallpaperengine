@@ -25,7 +25,12 @@ is available. Cutting a release is what produces that tarball.
      away the build,
    - runs `scripts/build-we.sh`,
    - runs `scripts/package-we.sh` → `qs-wallpaperengine-vX.Y.Z-x86_64.tar.zst` +
-     `manifest.json` + `SHA256SUMS`, and records `build-env.txt`,
+     `manifest.json` + `SHA256SUMS`, and records `build-env.txt`. Packaging also
+     rewrites the shipped binary's RUNPATH to `$ORIGIN/../lib` and **refuses to
+     produce a tarball if it is anything else** — the build bakes in the
+     builder's own directory (`/__w/...` in CI), which exists on no user's
+     machine, and that shipped in every release up to 0.2.2 before anything
+     noticed. `patchelf` is a hard dependency of this job for that reason,
    - **uploads `out/` as a workflow artifact** before anything that can still
      fail, so the build survives a failed smoke test or a failed publish. The
      upload is `continue-on-error`: it is a safety net, not a deliverable, so if
