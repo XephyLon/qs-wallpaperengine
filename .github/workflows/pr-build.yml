@@ -1,0 +1,114 @@
+name: pr-build
+
+# release.yml only triggers on `push: tags: ["v*"]` and workflow_dispatch, and
+# workflow_dispatch runs the full publish path. So until now NO check could ever
+# appear on a pull request, and `gh pr checks` came back empty not because a run
+# had failed but because none could exist. A 1290-line change to fence ordering
+# and thread lifetime reached "ready to review" without anything having compiled
+# it. This job closes that gap: it does everything release.yml does up to and
+# including the build, and then stops - no packaging, no draft release, no
+# publish, no contents:write token.
+on:
+  pull_request:
+    paths:
+      - "quickshell-module/**"
+      - "scripts/**"
+      - "bootstrap.sh"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+# Only the newest commit on a PR is worth ~35 minutes of runner time; a push
+# that supersedes an in-flight run should cancel it rather than queue behind it.
+concurrency:
+  group: pr-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Same reasoning as release.yml: the AUR steps compile linux-wallpaperengine
+    # and Quickshell from source, and a mirror that accepts the connection and
+    # then stalls would otherwise burn the runner's 6h default.
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+    steps:
+      # Before anything touches the network, for the same reason release.yml
+      # does it: the dependency steps below cost the better part of an hour and
+      # a checkout failure should not surface after paying for them.
+      - uses: actions/checkout@v4
+
+      - name: Retry helper
+        run: |
+          # Deliberately a plain bash loop rather than a marketplace action -
+          # nothing here should need pinning by SHA and re-auditing. Only ever
+          # wrapped around idempotent commands; every call site below starts
+          # from a clean slate on a second attempt.
+          cat > /usr/local/bin/ci-retry <<'SH'
+          #!/usr/bin/env bash
+          tries="${CI_RETRY_TRIES:-3}"; delay="${CI_RETRY_DELAY:-15}"
+          [[ "$tries" =~ ^[1-9][0-9]*$ ]] || { echo "ci-retry: bad CI_RETRY_TRIES='$tries'" >&2; exit 1; }
+          for ((i = 1; i <= tries; i++)); do
+            "$@" && exit 0
+            rc=$?
+            if (( i == tries )); then
+              echo "ci-retry: giving up after $i attempt(s) (rc=$rc)" >&2
+              exit "$rc"
+            fi
+            echo "ci-retry: attempt $i/$tries failed (rc=$rc), retrying in $((delay * i))s" >&2
+            sleep "$((delay * i))"
+          done
+          SH
+          chmod 755 /usr/local/bin/ci-retry
+          command -v ci-retry >/dev/null \
+            || { echo "::error::/usr/local/bin is not on PATH: $PATH"; exit 1; }
+
+      - name: Base tooling
+        run: |
+          ci-retry pacman -Syu --noconfirm --needed base-devel git sudo cmake ninja zstd python \
+            qt6-base qt6-declarative qt6-wayland
+          useradd -m build && echo "build ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: yay
+        run: |
+          ci-retry sudo -u build bash -c 'cd /tmp && rm -rf yay-bin \
+            && git clone https://aur.archlinux.org/yay-bin.git \
+            && cd yay-bin && makepkg -si --noconfirm'
+
+      - name: Runtime + build deps
+        run: |
+          CI_RETRY_TRIES=2 ci-retry sudo -u build \
+            yay -S --noconfirm --needed linux-wallpaperengine-git
+          ci-retry sudo -u build bash -c 'cd /tmp && rm -rf quickshell-git \
+            && yay -G quickshell-git && cd quickshell-git \
+            && source PKGBUILD && sudo pacman -S --noconfirm --needed --asdeps \
+               "${makedepends[@]}" "${depends[@]}"'
+
+      - name: Workflow self-test
+        run: |
+          # Cheap and catches a broken release.yml before a tag push does, but
+          # only exists on branches that carry it.
+          if [[ -f .github/workflows/test_release_yaml.sh ]]; then
+            bash .github/workflows/test_release_yaml.sh
+          else
+            echo "no test_release_yaml.sh on this branch; skipping"
+          fi
+
+      - name: Build
+        id: build
+        run: |
+          chown -R build:build "$GITHUB_WORKSPACE"
+          eval "$(sudo -u build env REPO_ROOT="$GITHUB_WORKSPACE" bash scripts/build-we.sh)"
+          echo "qs_bin=$QS_BIN" >> "$GITHUB_OUTPUT"
+          test -x "$QS_BIN" || { echo "::error::build produced no binary at $QS_BIN"; exit 1; }
+
+      - name: Smoke test the binary
+        run: |
+          # A clean compile proves nothing about whether the thing runs, which
+          # AGENTS.md is explicit about. This is the cheapest step above that
+          # bar: it proves the binary links and its QML module registers.
+          "${{ steps.build.outputs.qs_bin }}" --version
