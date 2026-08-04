@@ -71,6 +71,24 @@ public:
 	// Live-adjust the producer frame rate (thread-safe).
 	void setFps(int fps) { this->mFps.store(fps > 0 ? fps : 60); }
 
+	// The shell has decided a fullscreen window covers the output this wallpaper
+	// is drawn on (thread-safe, live - deliberately NOT a thread rebuild the way
+	// scaleMode and audioEnabled are, because nothing about the load changes).
+	// While it is set the loop keeps turning at a few hertz - enough that neither
+	// WE's wall-clock time base nor mpv's render context is left with anything to
+	// catch up on when the output comes back - but it publishes nothing and never
+	// calls mOnFrame, so the consumer stops repainting and the wallpaper's
+	// wl_surface stops committing.
+	//
+	// This is the shell's replacement for WE's own fullscreen pause, which the
+	// embed disables (see the argv comment in run()). WE's detector counts every
+	// fullscreen toplevel on every output through one flat counter, and the shell
+	// runs one of these threads per output, so the shell is the only side that
+	// knows which output is actually covered. It does NOT reach mpv: a video
+	// wallpaper keeps decoding, because only WE's own setPause() stops that and
+	// it is private to WallpaperApplication.
+	void setOccluded(bool occluded) { this->mOccluded.store(occluded); }
+
 	// This wallpaper cannot render and never will: the context could not be made
 	// current, GL did not load, our render targets came back INCOMPLETE, or WE
 	// threw out of setup(). Latched on the WE thread, polled from Qt's render
@@ -111,6 +129,12 @@ private:
 	std::atomic<bool> mStop {false};
 	std::atomic<int> mFps {60};
 	std::atomic<bool> mFailed {false};
+
+	// Read by the render loop every iteration, written by the consumer through
+	// setOccluded. Safe on the detach path for the same reason mStop and mFps
+	// are: a detached thread's WeThread is leaked rather than freed, so this
+	// member outlives every reader.
+	std::atomic<bool> mOccluded {false};
 	std::shared_ptr<std::atomic<bool>> mDetached =
 	    std::make_shared<std::atomic<bool>>(false);
 

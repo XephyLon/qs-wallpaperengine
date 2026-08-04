@@ -122,6 +122,25 @@ struct RenderTarget {
 	}
 };
 
+// Producer frame rate while the shell reports this output occluded. Deliberately
+// not zero - the occluded branch in run() has the argument for why the loop must
+// keep calling app->render() at all. Four hertz is fifteen times cheaper than the
+// default sixty and still drains mpv's render context often enough that it is
+// never sitting on a stale update when the output comes back. The number itself
+// is a guess: nothing here could profile what libmpv is comfortable with, so it
+// is a named constant precisely so it can be raised if a video wallpaper is ever
+// seen to hitch on resume.
+constexpr int OCCLUDED_FPS = 4;
+
+// Longest the pacing sleep may go without re-reading the stop and occlusion
+// flags. One 60Hz frame: this sleep is the only thing standing between the shell
+// clearing `occluded` and the first frame the user sees as a game closes, and
+// that must not be visible against the compositor's own fullscreen-exit
+// transition. It also bounds how long a shutdown sits inside an idle iteration,
+// which at OCCLUDED_FPS would otherwise be a quarter of a second - and that comes
+// straight off the bounded join's deadline in WeThread::stop().
+constexpr auto PACE_SLICE = std::chrono::milliseconds(16);
+
 } // namespace
 
 WeThread::WeThread(
@@ -208,18 +227,39 @@ WeThread::~WeThread() {
 }
 
 unsigned int WeThread::acquireTexture() {
+	// Deliberately outside the lock. It is the path every frame of a failed load
+	// and the first frames of every load take, and it never needs to see a
+	// consistent texture/fence pair - only "has anything ever been published".
 	if (!this->mReady) return 0;
-	GLuint tex;
-	GLsync sync;
-	{
-		std::lock_guard lock(this->mMutex);
-		tex = this->mFrontTexture;
-		sync = static_cast<GLsync>(this->mFrontFence);
-	}
-	// Server-side wait: Qt's context won't sample until WE's frame is complete.
-	// Does not block the CPU.
+
+	// The glWaitSync is issued INSIDE the lock, and that is load-bearing rather
+	// than tidiness. Copying the fence handle out and waiting on it after the
+	// unlock left a window the producer fits straight through: it takes the lock,
+	// reads the same fence as the one it is about to replace, releases, and calls
+	// glDeleteSync on it - all before this thread reaches the wait. The wait then
+	// names an object that no longer exists, which is GL_INVALID_VALUE and NO
+	// WAIT AT ALL (or, once the driver recycles the name for the next frame's
+	// fence, a wait on the wrong frame). Since this wait is the only thing
+	// stopping Qt from sampling a texture the producer is still blitting into,
+	// what that buys is a torn wallpaper frame - top half new, bottom half
+	// previous - with nothing anywhere to explain it: run() drains the GL error
+	// queue once after setup and deliberately never looks again, so the tear is
+	// the only evidence a hit leaves.
+	//
+	// Under the lock the two are totally ordered, and both orders are safe.
+	// Either the wait goes in first, and the producer's later glDeleteSync is
+	// deferred because a wait is already outstanding on the object; or the
+	// producer publishes first, and this thread reads the NEW fence and never
+	// names the deleted one. Holding the mutex across it costs nothing:
+	// glWaitSync is a server-side wait that returns to the caller immediately -
+	// Qt's context will not sample until WE's frame is complete, but no CPU
+	// blocks here - and the producer's own critical section is three stores long.
+	// This also closes the same race against the teardown block at the bottom of
+	// run(), which deletes the front fence under this lock.
+	std::lock_guard lock(this->mMutex);
+	auto sync = static_cast<GLsync>(this->mFrontFence);
 	if (sync) glWaitSync(sync, 0, GL_TIMEOUT_IGNORED);
-	return tex;
+	return this->mFrontTexture;
 }
 
 void WeThread::run() {
@@ -323,24 +363,44 @@ void WeThread::run() {
 	    const_cast<char*>(geo.c_str()),
 	    const_cast<char*>("--assets-dir"),
 	    const_cast<char*>(this->mAssetsDir.c_str()),
-	    // Pause only for a fullscreen window that is actually in front of the
-	    // wallpaper. WE's detector defaults to counting EVERY fullscreen
-	    // toplevel the compositor advertises - output, workspace and visibility
-	    // are not part of the test - so a game parked on a workspace the user
-	    // had left still froze the wallpaper they were looking at, on a still
-	    // frame, until it stopped being fullscreen.
+	    // Turn WE's fullscreen pause OFF and let the shell own the policy through
+	    // `occluded`. This flag does not merely pick a predicate - it decides
+	    // whether a detector is CONSTRUCTED AT ALL, and both halves of that
+	    // matter here.
 	    //
-	    // Restricting the count to *activated* toplevels is the whole fix
-	    // (isRelevant() drops a non-activated one): a fullscreen window holds
-	    // activation only while it is focused, which is exactly when it covers
-	    // the wallpaper. Switch away and it drops activation, so the wallpaper
-	    // the user can now see resumes.
+	    // Which output. WE's detector has no concept of one: its
+	    // wlr_foreign_toplevel output-enter/output-leave handlers are empty
+	    // stubs, so a toplevel's output is never recorded, and
+	    // anythingFullscreen() is one flat process-wide count. The shell runs one
+	    // of these threads per output, so every detector counts the same global
+	    // set - a fullscreen window on ONE output froze the wallpaper on ALL of
+	    // them, including the ones the user was looking at with nothing covering
+	    // them. --fullscreen-pause-ignore-appid does not help; it matches on app
+	    // id, not output.
 	    //
-	    // This has to be WE's own pause rather than the shell's. `live` on the
-	    // surface gates Qt's repaint timer and never reaches this thread, so it
-	    // cannot idle a video wallpaper - only setPause() in here reaches mpv,
-	    // and it is private to WallpaperApplication.
-	    const_cast<char*>("--fullscreen-pause-only-active"),
+	    // What it costs to ask - SECONDARY, and deliberately not the argument.
+	    // With the pause enabled, createFullscreenDetector() builds a real
+	    // WaylandFullScreenDetector, which opens its OWN wl_display_connect() - a
+	    // second Wayland client connection per wallpaper thread, on top of Qt's -
+	    // and does a wl_display_roundtrip() on every anythingFullscreen();
+	    // WallpaperApplication::render() asks once per frame and this loop calls
+	    // render() once per iteration. With the pause off the factory returns the
+	    // no-op base FullScreenDetector, whose anythingFullscreen() is a `return
+	    // false` with no I/O, so this thread does no Wayland work whatsoever - and
+	    // --no-fullscreen-pause is the only spelling that clears the setting.
+	    //
+	    // That round-trip has NOT been measured to cost anything here. Wayland
+	    // message traffic is cheap in CPU terms, and no attempt to isolate a
+	    // per-frame cost from it has succeeded. It is written down because it
+	    // explains what the flag actually switches, not because it justifies the
+	    // change - the output-blindness above is the whole justification, and it
+	    // would stand if the round-trip were free. Anyone tempted to re-enable the
+	    // pause should argue with that paragraph, not this one.
+	    //
+	    // The compensating benefit - idling a wallpaper nobody can see - is not
+	    // lost, it moves to the side that can actually tell: see setOccluded() and
+	    // the occluded branch in the render loop below.
+	    const_cast<char*>("--no-fullscreen-pause"),
 	};
 	// Audio is a load-time decision inside WE: with --silent, sound objects never
 	// create their SDL streams and video wallpapers get mpv volume 0 at creation,
@@ -421,11 +481,36 @@ void WeThread::run() {
 
 	using clock = std::chrono::steady_clock;
 
+	// Pace one iteration: sleep out the rest of its frame budget, but in slices,
+	// so the loop can notice something that happened during the sleep. Two things
+	// can. The shell uncovering this output, where the surface is still showing
+	// the frame it was covered on, so every millisecond until the next publish is
+	// a visible freeze as the game closes; and shutdown, which at OCCLUDED_FPS
+	// would otherwise sit in here for a quarter of a second per iteration and eat
+	// into the bounded join's deadline in stop().
+	//
+	// Slicing does not loosen the pacing: the deadline is recomputed from `start`
+	// every time round, so a slice that oversleeps shortens the next one and only
+	// the last one's overshoot leaks - exactly as with the single sleep this
+	// replaces.
+	auto pace = [this](clock::time_point start, clock::duration frameTime, bool occludedNow) {
+		while (!this->mStop && this->mOccluded.load() == occludedNow) {
+			const auto elapsed = clock::now() - start;
+			if (elapsed >= frameTime) break;
+			auto slice = frameTime - elapsed;
+			if (slice > PACE_SLICE) slice = PACE_SLICE;
+			std::this_thread::sleep_for(slice);
+		}
+	};
+
 	while (!this->mStop) {
 		auto start = clock::now();
-		const auto frameTime = std::chrono::milliseconds(1000 / this->mFps.load());
+		// Sampled once, and the whole iteration then agrees with itself: a flag
+		// that flips mid-frame must not pace at one rate and publish at the other.
+		const bool occludedNow = this->mOccluded.load();
+		const auto frameTime =
+		    std::chrono::milliseconds(1000 / (occludedNow ? OCCLUDED_FPS : this->mFps.load()));
 
-		auto& tgt = targets[back];
 		// app->render() advances g_Time (driver clock - else the scene freezes at
 		// t=0), updates audio/media, and drives the per-frame render + frame
 		// counter. WE renders scenes into the wallpaper's OWN scene FBO
@@ -433,6 +518,39 @@ void WeThread::run() {
 		// only works for some types (video), so blit the scene FBO into our
 		// double-buffered target - reliable for both scene and video.
 		app->render();
+		if (occludedNow) {
+			// The shell says a fullscreen window covers this output, so there is
+			// nobody to publish to: skip the blit, the fence, the flush, the
+			// publish and the wake-up - the entire cost the rest of the system
+			// pays for a frame, up to and including the surface's repaint and the
+			// window's wl_surface commit - and let the pacing above run WE at a
+			// few hertz instead.
+			//
+			// app->render() itself deliberately keeps being called, though
+			// skipping it would save more. WE's clock is wall-clock derived: our
+			// own driver's getRenderTime() is steady_clock since its first call,
+			// not a per-frame accumulator, so a loop that stops rendering through
+			// a two-hour game hands every time-integrating effect in the scene a
+			// two-hour dt in one step on the frame after it. And it would not buy
+			// what it looks like it buys: the expensive half of a video wallpaper
+			// is mpv decoding, and the only thing that stops that is WE's own
+			// setPause(), private to WallpaperApplication and unreachable from
+			// here - so we would stop draining mpv's render context while mpv went
+			// on filling it. That is the "WE has no pause that survives a resume
+			// cleanly" the surface's `live` comment is about. Running the same loop
+			// fifteen times slower has no resume hazard at all.
+			//
+			// Skipping the publish also skips `back ^= 1` and leaves mReady alone,
+			// which is what keeps the rest of the loop's invariants true: back
+			// still names the target that is not the front one, and a wallpaper
+			// that loads onto an already-covered output reports "nothing ready"
+			// rather than handing the consumer a texture nothing has drawn into
+			// yet.
+			pace(start, frameTime, occludedNow);
+			continue;
+		}
+
+		auto& tgt = targets[back];
 		GLuint srcFb = app->getFirstWallpaperFramebuffer();
 		const int srcW = app->getFirstWallpaperFramebufferWidth();
 		const int srcH = app->getFirstWallpaperFramebufferHeight();
@@ -512,8 +630,7 @@ void WeThread::run() {
 		this->notify();
 		back ^= 1;
 
-		auto elapsed = clock::now() - start;
-		if (elapsed < frameTime) std::this_thread::sleep_for(frameTime - elapsed);
+		pace(start, frameTime, occludedNow);
 	}
 
 	app->cleanup();
