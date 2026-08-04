@@ -3,6 +3,19 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 y="$here/release.yml"
 [[ -f "$y" ]] || { echo "FAIL: release.yml missing"; exit 1; }
+
+# Checked separately from the parse below, and before it, because conflating the
+# two burned a CI run: with PyYAML absent the parse died on ModuleNotFoundError,
+# the `||` caught that exit status like any other, and the script reported
+# "FAIL: invalid YAML" about a file that was perfectly well-formed. The diagnosis
+# that message invites - go read release.yml - is a dead end, because there is
+# nothing wrong with release.yml. Every other check in here also imports yaml, so
+# one probe up front covers all of them.
+python3 -c 'import yaml' 2>/dev/null || {
+	echo "FAIL: PyYAML not installed (python3 -c 'import yaml' failed)"
+	echo "      This says NOTHING about release.yml - install python-yaml/PyYAML and re-run."
+	exit 1
+}
 python3 -c 'import sys,yaml; yaml.safe_load(open(sys.argv[1]))' "$y" || { echo "FAIL: invalid YAML"; exit 1; }
 grep -q "tags:" "$y"              || { echo "FAIL: no tag trigger"; exit 1; }
 grep -q "workflow_dispatch" "$y"  || { echo "FAIL: no manual dispatch"; exit 1; }
