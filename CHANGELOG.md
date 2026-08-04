@@ -3,7 +3,7 @@
 qs-wallpaperengine follows [Semantic Versioning](https://semver.org/) (currently
 pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
-## [Unreleased]
+## [0.2.2] — 2026-08-04
 
 ### Added
 - `WallpaperEngineSurface.occluded` — set by the shell when a fullscreen window
