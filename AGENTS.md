@@ -2,6 +2,36 @@
 
 Reference for coding agents (and humans) working in this repository.
 
+> **Read this file sequentially, in full, top to bottom, before any work — and again after a
+> context compaction.** Grep hits and section jumps are not reading: the rules that get broken are
+> the ones adjacent to the section someone jumped to.
+
+## Doc discipline
+
+**Every point added to this file must cite the commit that motivated it** — the change it
+documents, or the mistake it guards against — kernel `Fixes:` style:
+
+```
+4b03988 ("fix(package): rewrite the bundled libraries' RUNPATH too")
+```
+
+A point with no commit behind it is unverifiable folklore; the citation is what lets the next agent
+judge whether the reasoning still applies. `test/lint_doc_citations.py` (run by
+`.github/workflows/docs.yml`) fails on any citation that resolves to nothing — by SHA **or** by
+exact subject line, the fallback existing because rebase merges rewrite SHAs and the subject is the
+half that survives.
+
+The worked motivation is this repo's own RUNPATH saga: 0494446 ("fix(package): ship $ORIGIN/../lib
+as the RUNPATH, not the builder's path") shipped believing it was the whole fix, and 4b03988
+("fix(package): rewrite the bundled libraries' RUNPATH too") is the half it missed — `DT_RUNPATH`
+is not transitive. A doc entry asserting either half alone, with no commit to check it against,
+would have read as complete.
+
+**Every PR body must carry a `Docs:` receipt line**, enforced by
+`.github/workflows/docs-receipt.yml`: either `Docs: updated AGENTS.md §<section>` or
+`Docs: not needed — <reason>`. It converts "did you consider the docs" (unverifiable) into a line
+a reviewer checks in seconds.
+
 ## What this is
 
 `qs-wallpaperengine` builds a **patched Quickshell binary** that embeds a `Quickshell.WallpaperEngine`
