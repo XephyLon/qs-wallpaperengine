@@ -5,6 +5,8 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-08-05
+
 ### Fixed
 - **The shipped binary could not find its own bundled libraries.** Release
   tarballs carried the builder's own directory as their RUNPATH — in CI,
