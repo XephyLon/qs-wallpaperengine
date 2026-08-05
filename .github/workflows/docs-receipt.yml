@@ -1,0 +1,24 @@
+# Every PR must state what happened to AGENTS.md - see AGENTS.md,
+# "Doc discipline". A receipt the reviewer can check in seconds is the
+# mechanized form of "keep the docs in sync".
+name: docs-receipt
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  receipt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a Docs receipt in the PR body
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if printf '%s\n' "$BODY" | grep -qE '^Docs: (updated|not needed)'; then
+            echo "Docs receipt found:"
+            printf '%s\n' "$BODY" | grep -E '^Docs: (updated|not needed)'
+          else
+            echo '::error::PR body needs a Docs receipt line: either "Docs: updated AGENTS.md §<section>" or "Docs: not needed — <reason>". See AGENTS.md → "Doc discipline".'
+            exit 1
+          fi

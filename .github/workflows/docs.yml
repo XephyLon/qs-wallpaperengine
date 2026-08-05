@@ -1,0 +1,20 @@
+# Doc citation lint - every `<sha> ("<subject>")` citation in AGENTS.md /
+# CLAUDE.md must resolve to a commit. See AGENTS.md, "Doc discipline".
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  citations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the lint resolves citations by SHA or subject, and a
+          # depth-1 clone would fail every one of them.
+          fetch-depth: 0
+      - name: Doc citation lint
+        run: python3 test/lint_doc_citations.py
