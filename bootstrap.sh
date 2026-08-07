@@ -148,6 +148,120 @@ PY
 sed -i 's/mpv_set_property_string (this->m_handle, "hwdec", "auto");/mpv_set_property_string (this->m_handle, "hwdec", "auto-safe");/' \
 	"$WE_SRC/src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp"
 
+# GLPlayer: cap libmpv's vsync fences (#16). mpv's vo=libmpv creates one
+# glFenceSync per rendered frame in ra_gl_ctx_submit_frame and never deletes
+# it - the only cleanup lives in ra_gl_ctx_swap_buffers, which the render API
+# deliberately never calls (libmpv_gl.c: "we can just not call them to begin
+# with"). Each undeleted sync pins host memory in the GL driver (~5 KB on
+# NVIDIA), which leaks ~10 MB/min at 30 fps for EVERY video wallpaper,
+# regardless of resolution or hardware/software decode. Interpose
+# glFenceSync/glDeleteSync in the get_proc_address table handed to mpv and
+# delete the oldest sync beyond a small cap; mpv's own PBO-pool fences are
+# waited and deleted young, so only the leaked ones age into it. Verified:
+# harness slope 10.2 MB/min -> 0.6 MB/min, and flat (56 KB/min) over a 12-min
+# standalone run. Idempotent (marker-guarded); fails loud on anchor loss.
+python3 - "$WE_SRC/src/WallpaperEngine/VideoPlayback/MPV/GLPlayer.cpp" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "EMBED PATCH: cap libmpv vsync fences" in s:
+    sys.exit(0)
+
+inc_anchor = '#include <mpv/stream_cb.h>\n'
+if inc_anchor not in s:
+    sys.exit("EMBED PATCH: stream_cb include anchor not found in GLPlayer.cpp")
+s = s.replace(inc_anchor, inc_anchor + '\n#include <algorithm>\n#include <cstring>\n#include <deque>\n#include <mutex>\n', 1)
+
+old_fn = '''void* get_proc_address (void* ctx, const char* name) {
+    return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
+}'''
+if old_fn not in s:
+    sys.exit("EMBED PATCH: get_proc_address anchor not found in GLPlayer.cpp")
+new_fn = '''// EMBED PATCH: cap libmpv vsync fences (qs-wallpaperengine#16).
+// mpv's vo=libmpv creates one glFenceSync per rendered frame in
+// ra_gl_ctx_submit_frame and never deletes it: the only cleanup lives in
+// ra_gl_ctx_swap_buffers, which the render API deliberately never calls
+// (libmpv_gl.c: "we can just not call them to begin with"). Each undeleted
+// sync pins host memory in the GL driver (~5 KB on NVIDIA), leaking ~10 MB/min
+// at 30 fps for every video wallpaper. mpv never touches the aged fences again
+// (no wait, no delete, not even at uninit), so deleting the oldest beyond a
+// cap is safe; mpv's own PBO-pool fences are waited and deleted young, so only
+// the leaked ones ever age into the cap.
+namespace {
+std::mutex s_fenceLock;
+std::deque<void*> s_fenceRing;
+constexpr size_t FENCE_RING_CAP = 64;
+using FenceSyncFn = void* (*) (unsigned int, unsigned int);
+using DeleteSyncFn = void (*) (void*);
+FenceSyncFn s_realFenceSync = nullptr;
+DeleteSyncFn s_realDeleteSync = nullptr;
+
+void* cappedFenceSync (unsigned int condition, unsigned int flags) {
+    void* sync = s_realFenceSync (condition, flags);
+    if (sync == nullptr) return sync;
+    void* victim = nullptr;
+    {
+	std::lock_guard lock (s_fenceLock);
+	s_fenceRing.push_back (sync);
+	if (s_fenceRing.size () > FENCE_RING_CAP) {
+	    victim = s_fenceRing.front ();
+	    s_fenceRing.pop_front ();
+	}
+    }
+    if (victim != nullptr) s_realDeleteSync (victim);
+    return sync;
+}
+
+void cappedDeleteSync (void* sync) {
+    {
+	std::lock_guard lock (s_fenceLock);
+	const auto it = std::find (s_fenceRing.begin (), s_fenceRing.end (), sync);
+	if (it != s_fenceRing.end ()) s_fenceRing.erase (it);
+    }
+    s_realDeleteSync (sync);
+}
+
+// Drain on player stop, while a context of the share group is still current:
+// ring entries from a fully destroyed standalone context would otherwise be
+// deleted later through dangling sync handles.
+void drainFenceRing () {
+    std::deque<void*> doomed;
+    {
+	std::lock_guard lock (s_fenceLock);
+	doomed.swap (s_fenceRing);
+    }
+    if (s_realDeleteSync != nullptr)
+	for (void* sync : doomed) s_realDeleteSync (sync);
+}
+} // namespace
+
+void* get_proc_address (void* ctx, const char* name) {
+    void* proc = static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
+    if (proc != nullptr && std::strcmp (name, "glFenceSync") == 0) {
+	s_realFenceSync = reinterpret_cast<FenceSyncFn> (proc);
+	return reinterpret_cast<void*> (&cappedFenceSync);
+    }
+    if (proc != nullptr && std::strcmp (name, "glDeleteSync") == 0) {
+	s_realDeleteSync = reinterpret_cast<DeleteSyncFn> (proc);
+	return reinterpret_cast<void*> (&cappedDeleteSync);
+    }
+    return proc;
+}'''
+s = s.replace(old_fn, new_fn, 1)
+
+stop_anchor = '''void GLPlayer::stop () {
+    // clean up mpv and get it ready to start again at some point
+    if (this->m_renderContext) {'''
+if stop_anchor not in s:
+    sys.exit("EMBED PATCH: GLPlayer::stop anchor not found in GLPlayer.cpp")
+s = s.replace(stop_anchor, '''void GLPlayer::stop () {
+    // EMBED PATCH (qs-wallpaperengine#16): see drainFenceRing above.
+    drainFenceRing ();
+    // clean up mpv and get it ready to start again at some point
+    if (this->m_renderContext) {''', 1)
+
+open(p, "w").write(s)
+PY
+
 # CScene::dispatchObjectType: guard particle systems with no material. Some
 # workshop scenes (e.g. 431960/1955123321 "2B") ship a particle object whose
 # material is null; CParticle's constructor dereferences particle.material->material
