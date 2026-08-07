@@ -6,6 +6,25 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 ## [Unreleased]
 
 ### Fixed
+- **Every video wallpaper leaked ~10 MB/min of host memory, forever.**
+  ([#16](https://github.com/XephyLon/qs-wallpaperengine/issues/16)) mpv's
+  `vo=libmpv` creates one `glFenceSync` per rendered frame in
+  `ra_gl_ctx_submit_frame` and never deletes it: the only cleanup lives in
+  `ra_gl_ctx_swap_buffers`, which the render API deliberately never calls
+  (`libmpv_gl.c`). Each undeleted sync pins ~5 KB of driver-side host memory on
+  NVIDIA — at 30 fps that is ~10 MB/min, ~14 GB/day, independent of resolution
+  and of hardware vs software decode, and GL sync objects belong to the share
+  group, so switching wallpapers never reclaimed them. Diagnosed with a
+  standalone libmpv repro (no WE, no Quickshell) plus a GL call-count shim:
+  fences created 30/s, `glDeleteSync` called zero times, ~5.2 KB apiece —
+  matching the observed slope exactly. The bootstrap now patches GLPlayer to
+  interpose `glFenceSync`/`glDeleteSync` in the function table handed to mpv
+  and delete the oldest sync beyond a 64-entry cap (mpv's own PBO-pool fences
+  are waited and deleted young, so only leaked fences age into it), and to
+  drain the ring on player stop. Measured: embedded harness slope 10.2 MB/min
+  → 0.6 MB/min; a 12-minute standalone run settles flat at ~56 KB/min after
+  the first loop restart. Scene wallpapers were never affected. Upstream mpv
+  bug; a report with the minimal repro is being prepared separately.
 - Disabling wallpaper audio no longer leaves linux-wallpaperengine's automute
   detector running. `--silent` suppresses playback but does not disable that
   detector; it was synchronously enumerating PulseAudio and every sink input on
