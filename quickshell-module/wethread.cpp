@@ -407,14 +407,21 @@ void WeThread::run() {
 	// so it cannot be re-enabled at runtime - the surface rebuilds this thread to
 	// flip it.
 	//
-	// When audio IS on: disable automute (WE mutes itself while ANY other
-	// unmuted sink-input exists - virtual sinks/headset loopbacks trip it
-	// permanently; the shell's own toggle is the mute control here) and run at
-	// full internal volume (default is 15/128) so the per-stream system mixer
-	// is the one volume knob. --volume and --silent are mutually exclusive to
-	// WE's parser; only one branch ever adds its flags.
+	// Automute is ALWAYS disabled. It is not useful in an embedded surface: the
+	// shell owns the audio toggle, and WE's detector mutes itself whenever any
+	// other unmuted sink input exists. More importantly, leaving automute enabled
+	// in the --silent branch still constructs PulseAudioPlayingDetector and makes
+	// it enumerate the server and every sink input synchronously on every rendered
+	// frame. A 150-second heaptrack run while investigating #16 recorded 10.7
+	// million pa_xmalloc calls from that path. Removing the churn does not by
+	// itself resolve that issue's remaining video-path growth. --silent
+	// suppresses output, not the detector.
+	argv.push_back(const_cast<char*>("--noautomute"));
+
+	// When audio IS on, run at full internal volume (default is 15/128) so the
+	// per-stream system mixer is the one volume knob. --volume and --silent are
+	// mutually exclusive to WE's parser; only one branch adds either flag.
 	if (this->mAudioEnabled) {
-		argv.push_back(const_cast<char*>("--noautomute"));
 		argv.push_back(const_cast<char*>("--volume"));
 		argv.push_back(const_cast<char*>("128"));
 	} else {

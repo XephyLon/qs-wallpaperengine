@@ -5,6 +5,19 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+- Disabling wallpaper audio no longer leaves linux-wallpaperengine's automute
+  detector running. `--silent` suppresses playback but does not disable that
+  detector; it was synchronously enumerating PulseAudio and every sink input on
+  every rendered frame despite there being no wallpaper audio to mute. A
+  heaptrack run made while investigating
+  [#16](https://github.com/XephyLon/qs-wallpaperengine/issues/16) recorded 10.7
+  million PulseAudio allocations in 150 seconds from this path. Removing that
+  churn does not by itself resolve #16's remaining video-path growth. The embed
+  now always passes `--noautomute`; its own `audioEnabled` property remains the
+  single audio policy, while enabled wallpapers still use `--volume 128` and
+  disabled ones use `--silent`.
+
 ## [0.2.3] — 2026-08-05
 
 ### Fixed
