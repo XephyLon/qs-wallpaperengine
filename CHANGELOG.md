@@ -5,6 +5,19 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+## [0.2.5] — 2026-08-08
+
+### Fixed
+- **Rebuild against ffmpeg 9 / x265 4.3.** No code changes. The v0.2.4 prebuilt
+  links the system ffmpeg 8 sonames (`libavcodec.so.62`, `libavformat.so.62`,
+  `libavutil.so.60`, `libswresample.so.6`); Arch's ffmpeg `2:9.0` soname bump
+  removes them, so `quickshell` fails at load with
+  `libavcodec.so.62: cannot open shared object file` the moment the system
+  updates. This release's prebuilt is produced by the same CI recipe on the
+  updated `archlinux:latest` image and links the ffmpeg 9 sonames
+  (`.63`/`.63`/`.61`/`.7`). Only `liblinux-wallpaperengine-lib.so` links ffmpeg
+  directly; mpv resolves via its own rebuilt package.
+
 ## [0.2.4] — 2026-08-07
 
 ### Fixed
