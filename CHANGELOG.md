@@ -5,6 +5,8 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-08-07
+
 ### Fixed
 - **Every video wallpaper leaked ~10 MB/min of host memory, forever.**
   ([#16](https://github.com/XephyLon/qs-wallpaperengine/issues/16)) mpv's
