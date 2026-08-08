@@ -107,13 +107,12 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// thing that throttles the renderer at all. It is a live toggle - it does not
 	/// reload the wallpaper the way scaleMode and audioEnabled do.
 	///
-	/// It does not reach mpv. A video wallpaper goes on decoding at the file's
-	/// frame rate while this is set, because the only thing that stops that is the
-	/// renderer's own setPause(), which is private to its application class and
-	/// unreachable from the embed. What this does drop is everything downstream of
-	/// the decode - the blit, the fence, the publish, the surface's repaint and the
-	/// window's commit - plus fifteen sixteenths of the render itself. Size a power
-	/// budget off that, not off "the wallpaper is paused".
+	/// It reaches mpv too (qs-wallpaperengine#19): the renderer thread forwards
+	/// this flag into the patched WallpaperApplication::setExternalPaused() each
+	/// iteration, which runs the renderer's own pause machinery - video decode
+	/// stops, playlist timers are accounted, and resume is the same path the
+	/// engine uses standalone. Before that patch a 7680x2160 software-decoded
+	/// video kept burning ~180% CPU under a fullscreen game with this set.
 	///
 	/// The embedded renderer's own fullscreen pause is disabled, because its
 	/// detector has no concept of an output and counts every fullscreen window
