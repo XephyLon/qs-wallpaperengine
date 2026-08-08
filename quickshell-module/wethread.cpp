@@ -518,12 +518,28 @@ void WeThread::run() {
 		const auto frameTime =
 		    std::chrono::milliseconds(1000 / (occludedNow ? OCCLUDED_FPS : this->mFps.load()));
 
+		// Feed the shell's occlusion verdict into WE's own pause machinery
+		// (qs-wallpaperengine#19). This is the half our occluded branch below
+		// cannot cover: skipping the blit/publish stops everything Qt-side, but
+		// mpv kept decoding - measured at a constant 180% CPU for a 7680x2160
+		// software-decoded video under a fullscreen game. The patched
+		// setExternalPaused() is ORed into render()'s fullscreen-detector
+		// checks, so WE pauses exactly as it does standalone: RenderContext::
+		// setPause -> CVideo -> GLPlayer -> mpv `pause` (decode stops), with
+		// WE's own playlist-timer accounting and resume path. Same thread as
+		// render(); takes effect on this iteration's render() call.
+		app->setExternalPaused(occludedNow);
 		// app->render() advances g_Time (driver clock - else the scene freezes at
 		// t=0), updates audio/media, and drives the per-frame render + frame
 		// counter. WE renders scenes into the wallpaper's OWN scene FBO
 		// (getFirstWallpaperFramebuffer); the setDestinationFramebuffer composite
 		// only works for some types (video), so blit the scene FBO into our
 		// double-buffered target - reliable for both scene and video.
+		//
+		// While externally paused, render() early-returns after a 250us sleep
+		// instead: WE stops advancing its clock, exactly as upstream's own
+		// fullscreen pause does, and the resume path recomputes time and
+		// playlist deadlines itself.
 		app->render();
 		if (occludedNow) {
 			// The shell says a fullscreen window covers this output, so there is
@@ -533,19 +549,10 @@ void WeThread::run() {
 			// window's wl_surface commit - and let the pacing above run WE at a
 			// few hertz instead.
 			//
-			// app->render() itself deliberately keeps being called, though
-			// skipping it would save more. WE's clock is wall-clock derived: our
-			// own driver's getRenderTime() is steady_clock since its first call,
-			// not a per-frame accumulator, so a loop that stops rendering through
-			// a two-hour game hands every time-integrating effect in the scene a
-			// two-hour dt in one step on the frame after it. And it would not buy
-			// what it looks like it buys: the expensive half of a video wallpaper
-			// is mpv decoding, and the only thing that stops that is WE's own
-			// setPause(), private to WallpaperApplication and unreachable from
-			// here - so we would stop draining mpv's render context while mpv went
-			// on filling it. That is the "WE has no pause that survives a resume
-			// cleanly" the surface's `live` comment is about. Running the same loop
-			// fifteen times slower has no resume hazard at all.
+			// app->render() keeps being called: it is what runs WE's paused
+			// branch (and, on the iteration after the shell uncovers this
+			// output, the resume). The decode half is handled above via
+			// setExternalPaused; what remains here is only the publish half.
 			//
 			// Skipping the publish also skips `back ^= 1` and leaves mReady alone,
 			// which is what keeps the rest of the loop's invariants true: back

@@ -84,9 +84,10 @@ public:
 	// embed disables (see the argv comment in run()). WE's detector counts every
 	// fullscreen toplevel on every output through one flat counter, and the shell
 	// runs one of these threads per output, so the shell is the only side that
-	// knows which output is actually covered. It does NOT reach mpv: a video
-	// wallpaper keeps decoding, because only WE's own setPause() stops that and
-	// it is private to WallpaperApplication.
+	// knows which output is actually covered. It also reaches mpv: the render
+	// loop forwards this flag into the patched
+	// WallpaperApplication::setExternalPaused() each iteration, which runs WE's
+	// own pause machinery and stops video decode (qs-wallpaperengine#19).
 	void setOccluded(bool occluded) { this->mOccluded.store(occluded); }
 
 	// This wallpaper cannot render and never will: the context could not be made
