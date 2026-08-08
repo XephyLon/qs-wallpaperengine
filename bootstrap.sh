@@ -119,6 +119,51 @@ if "getFirstWallpaperFramebuffer" not in h:
 open(h_p, "w").write(h)
 PY
 
+# WallpaperApplication: external pause control (qs-wallpaperengine#19).
+# `occluded` idles the module's render thread but nothing stopped mpv decoding:
+# the only path that pauses playback is render()'s fullscreen-detector branch
+# (m_renderContext->setPause -> CVideo -> GLPlayer -> mpv `pause`), and
+# --no-fullscreen-pause stubs that detector out because it is output-blind
+# (process-wide) while the shell runs one renderer per output. Give the host a
+# per-instance flag ORed into BOTH detector checks, so the shell's per-output
+# occlusion verdict drives WE's own pause machinery - playlist timer
+# accounting and clean resume included - with the stub detector still off.
+python3 - "$WE_SRC/src/WallpaperEngine/Application/WallpaperApplication.cpp" \
+         "$WE_SRC/src/WallpaperEngine/Application/WallpaperApplication.h" <<'PY'
+import sys
+cpp_p, h_p = sys.argv[1], sys.argv[2]
+
+cpp = open(cpp_p).read()
+if "m_externalPaused" not in cpp:
+    cond = ("this->m_fullScreenDetector->anythingFullscreen () "
+            "&& this->m_context.state.general.keepRunning")
+    # Both the enter-pause check and the stay-paused check in render(). Exactly
+    # two, or the anchor drifted and the patch no longer means what it says.
+    if cpp.count(cond) != 2:
+        sys.exit("EMBED PATCH: expected exactly 2 fullscreen-detector checks "
+                 f"in WallpaperApplication.cpp render(), found {cpp.count(cond)}")
+    cpp = cpp.replace(cond,
+        "(this->m_fullScreenDetector->anythingFullscreen () || this->m_externalPaused) "
+        "&& this->m_context.state.general.keepRunning")
+open(cpp_p, "w").write(cpp)
+
+h = open(h_p).read()
+if "setExternalPaused" not in h:
+    anchor = "    [[nodiscard]] int getFirstWallpaperFramebufferHeight () const;\n"
+    if anchor not in h:
+        sys.exit("EMBED PATCH: getFirstWallpaperFramebufferHeight anchor not "
+                 "found in WallpaperApplication.h (apply the framebuffer patch first)")
+    h = h.replace(anchor, anchor +
+        "\n    // EMBED PATCH (qs-wallpaperengine#19): host-driven pause. ORed into\n"
+        "    // render()'s fullscreen-detector checks so the embedding shell's\n"
+        "    // per-output occlusion verdict runs WE's own pause machinery (the\n"
+        "    // only thing that stops mpv decoding). Same-thread as render();\n"
+        "    // plain bool on purpose.\n"
+        "    void setExternalPaused (bool paused) { this->m_externalPaused = paused; }\n"
+        "    bool m_externalPaused = false;\n", 1)
+open(h_p, "w").write(h)
+PY
+
 # CWallpaper: expose the scene FBO's size. GLPlayer resizes the video texture
 # but the CFBO object's stored size stays stale, so report the wallpaper's
 # logical size (getWidth/getHeight - video resolution for CVideo, camera for
