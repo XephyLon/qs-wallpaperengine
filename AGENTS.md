@@ -81,6 +81,14 @@ export LD_LIBRARY_PATH="$PWD/build/linux-wallpaperengine/build/output:/opt/linux
 `test/` holds several such harnesses. A `FloatingWindow` with one `WallpaperEngineSurface` is enough
 to prove a frame arrives, and costs seconds instead of a session.
 
+**`quickshell-module/` is compiled from a copy, not in place.** `build-we.sh` copies it into
+`build/quickshell/src/wallpaperengine/` and the build compiles THAT. An incremental
+`cmake --build build/quickshell/build2` after editing `quickshell-module/*` happily relinks the old
+objects and prints `[1/1] Linking` - the edit is not in the binary, and nothing says so. Debugging a
+"my change has no effect" mystery, check the copy first; sync it (`cp quickshell-module/*.cpp
+quickshell-module/*.hpp build/quickshell/src/wallpaperengine/`) before rebuilding.
+(fix(module): drive WE's own pause machinery from the occlusion flag - an hour went to exactly this.)
+
 ## Architecture
 
 `WallpaperEngineSurface` is a `QQuickItem`. `WeThread` runs linux-wallpaperengine on **its own thread

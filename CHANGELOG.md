@@ -5,6 +5,20 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+### Fixed
+- **`occluded` now pauses video playback, not just publishing.**
+  ([#19](https://github.com/XephyLon/qs-wallpaperengine/issues/19)) Since
+  v0.2.2 disabled WE's own (output-blind) fullscreen detector, nothing paused
+  mpv: `occluded` skipped the blit/fence/publish but a software-decoded video
+  kept burning CPU behind a fullscreen game (~180% measured for 7680x2160
+  h264, which NVDEC rejects - its h264 width cap is 4096). The bootstrap patch
+  gives `WallpaperApplication` a per-instance `setExternalPaused()` ORed into
+  both of `render()`'s fullscreen-detector checks, and the render thread
+  forwards the occlusion flag into it every iteration - WE's own pause
+  machinery (mpv `pause`, playlist-timer accounting, clean resume) runs
+  exactly as it does standalone. Measured: ~250% -> ~1.5% CPU on occlude,
+  full-rate resume on uncover, across repeated cycles.
+
 ## [0.2.5] — 2026-08-08
 
 ### Fixed
