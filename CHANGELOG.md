@@ -5,6 +5,8 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-08-08
+
 ### Fixed
 - **`occluded` now pauses video playback, not just publishing.**
   ([#19](https://github.com/XephyLon/qs-wallpaperengine/issues/19)) Since
