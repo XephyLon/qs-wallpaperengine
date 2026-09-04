@@ -144,6 +144,14 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// aspect is not the scene's.
 	Q_PROPERTY(int contentWidth READ contentWidth NOTIFY contentSizeChanged);
 	Q_PROPERTY(int contentHeight READ contentHeight NOTIFY contentSizeChanged);
+	/// Render the wallpaper into a window this fraction of the surface's pixel
+	/// size and let the scene graph upscale it, 0.25..1 (1 = native, default).
+	/// A load-time input (the render window is fixed when WE starts), so a
+	/// change reloads. Note what it does NOT do: a SCENE renders into its own
+	/// authored-resolution FBO regardless of window, so this only shrinks the
+	/// final composite for a scene (a small saving); it is the video path,
+	/// composited at window size, where it cuts real work.
+	Q_PROPERTY(qreal renderScale READ renderScale WRITE setRenderScale NOTIFY renderScaleChanged);
 	/// Set by the shell when a fullscreen window covers THIS output. Default
 	/// false. While it is set the wallpaper's renderer idles at a few frames a
 	/// second and publishes nothing, so the surface stops repainting and the
@@ -236,6 +244,9 @@ public:
 	[[nodiscard]] int contentWidth() const { return this->mContentWidth; }
 	[[nodiscard]] int contentHeight() const { return this->mContentHeight; }
 
+	[[nodiscard]] qreal renderScale() const { return this->mRenderScale; }
+	void setRenderScale(qreal renderScale);
+
 	/// Ask the renderer for the full, uncropped scene as a PNG at `path` -
 	/// the real content aspect (e.g. 32:9), which the crop picker needs
 	/// because the preview image is not the scene. The WE thread writes it on
@@ -267,6 +278,7 @@ signals:
 	void focusXChanged();
 	void focusYChanged();
 	void contentSizeChanged();
+	void renderScaleChanged();
 	void sceneGrabReady(const QString& path);
 	void occludedChanged();
 	void renderedChanged();
@@ -294,6 +306,7 @@ private:
 	// property notification rather than a poll on the QML side.
 	int mContentWidth = 0;
 	int mContentHeight = 0;
+	qreal mRenderScale = 1.0;
 
 	// The reload dance every load-time WE argument shares (scaleMode was its
 	// first spelling): retire the running load's generation so verdicts the
