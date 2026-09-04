@@ -6,7 +6,9 @@
 
 #include <EGL/egl.h>
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include <qcoreapplication.h>
 #include <qopenglcontext.h>
@@ -372,9 +374,26 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		// The callback holds its own shared_ptr to the sink, so the sink survives
 		// for as long as the thread can still call it - including a thread that
 		// outlived this item by being detached.
+		// The property map becomes WE's own "name=value" strings here, sorted by
+		// key: QVariantMap iterates in key order already, and spelling the sort
+		// guarantee out is what keeps the same map always building the same argv
+		// (the header's contract). Reading these GUI-thread members from the
+		// render thread is safe for the reason mFps and mAudioEnabled always
+		// were: the GUI thread is blocked for the scene-graph sync.
+		std::vector<std::string> setProperties;
+		setProperties.reserve(static_cast<std::size_t>(this->mProperties.size()));
+		for (auto it = this->mProperties.constBegin(); it != this->mProperties.constEnd(); ++it) {
+			setProperties.push_back(
+			    it.key().toStdString() + "=" + it.value().toString().toStdString()
+			);
+		}
 		this->mThread = std::make_unique<WeThread>(
 		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
 		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled,
+		    // 0..100 -> WE's 0..128; rounding at the boundary so 100 is exactly
+		    // the old fixed 128.
+		    (this->mVolume * 128 + 50) / 100, this->mAudioProcessing, this->mMouseDisabled,
+		    this->mParallaxDisabled, this->mParticlesDisabled, std::move(setProperties),
 		    [sink = this->mFrameSink] { sink->post(); }
 		);
 		// A fresh thread starts unoccluded, which is wrong whenever the shell
@@ -543,29 +562,26 @@ void WallpaperEngineSurface::setFps(int fps) {
 	if (this->mThread) this->mThread->setFps(fps);
 }
 
-void WallpaperEngineSurface::setScaleMode(const QString& scaleMode) {
-	if (scaleMode == this->mScaleMode) return;
-	this->mScaleMode = scaleMode;
-	// Scaling is a WE startup argument; rebuild the thread so it takes effect, and
-	// retire the load for the same reason setProjectPath does - a verdict already
-	// posted about the pre-reload attempt must not land on the reloaded one. This
-	// is also why the guard is a counter rather than a comparison against
-	// mProjectPath: the path does not change here.
-	//
-	// Before the emit, exactly as in setProjectPath, so that a QML handler running
-	// synchronously inside it - including one that re-enters a setter - cannot
-	// observe the new scaleMode while the retired load's generation is still the
-	// current one.
+// The reload dance every load-time WE argument shares. Retire the load's
+// generation for the reason setProjectPath spells out - a verdict already
+// posted about the pre-reload attempt must not land on the reloaded one, and
+// the guard is a counter rather than a path comparison because the path does
+// not change here. Clear mLoadedPath so updatePaintNode rebuilds the thread.
+// Take back the two verdicts: the reload drops the node holding the old
+// load's frame, so what is on screen stops being a rendered wallpaper the
+// moment the render thread gets there - saying so here rather than an
+// event-loop turn later closes the turn in which QML would be told there is
+// content to transition against a black surface. Both clears are guarded on
+// the current value, so whichever side runs second does nothing.
+//
+// Callers run this BEFORE their own change signal, so a QML handler running
+// synchronously inside the emit - including one that re-enters a setter -
+// cannot observe the new value while the retired load's generation is still
+// the current one. update() stays with the caller too, after its emit,
+// preserving the original ordering exactly.
+void WallpaperEngineSurface::retireAndReload() {
 	this->mLoadGeneration.fetch_add(1);
 	this->mLoadedPath.clear();
-	emit this->scaleModeChanged();
-	// The reload this just scheduled drops the node holding the old load's frame,
-	// so what is on screen stops being a rendered wallpaper the moment the render
-	// thread gets there. Say so here rather than an event-loop turn later when the
-	// render thread's own clear post arrives, because that turn is one in which QML
-	// would be told there is content to transition against a black surface. Both
-	// sides are guarded on the current value, so whichever runs second does
-	// nothing.
 	if (this->mRendered) {
 		this->mRendered = false;
 		emit this->renderedChanged();
@@ -574,6 +590,14 @@ void WallpaperEngineSurface::setScaleMode(const QString& scaleMode) {
 		this->mFailed = false;
 		emit this->failedChanged();
 	}
+}
+
+void WallpaperEngineSurface::setScaleMode(const QString& scaleMode) {
+	if (scaleMode == this->mScaleMode) return;
+	this->mScaleMode = scaleMode;
+	// Scaling is a WE startup argument; rebuild the thread so it takes effect.
+	this->retireAndReload();
+	emit this->scaleModeChanged();
 	this->update();
 }
 
@@ -581,21 +605,63 @@ void WallpaperEngineSurface::setAudioEnabled(bool audioEnabled) {
 	if (audioEnabled == this->mAudioEnabled) return;
 	this->mAudioEnabled = audioEnabled;
 	// Audio existence is a WE load-time decision (--silent skips stream/volume
-	// setup entirely); rebuild the thread so the toggle takes effect, and retire
-	// the load's generation as setScaleMode does so the pre-reload attempt's
-	// queued verdicts do not land on the reloaded wallpaper. Ordered against the
-	// emit and followed by the same two verdict clears, for the same reasons.
-	this->mLoadGeneration.fetch_add(1);
-	this->mLoadedPath.clear();
+	// setup entirely); rebuild the thread so the toggle takes effect.
+	this->retireAndReload();
 	emit this->audioEnabledChanged();
-	if (this->mRendered) {
-		this->mRendered = false;
-		emit this->renderedChanged();
-	}
-	if (this->mFailed) {
-		this->mFailed = false;
-		emit this->failedChanged();
-	}
+	this->update();
+}
+
+void WallpaperEngineSurface::setVolume(int volume) {
+	const int clamped = std::clamp(volume, 0, 100);
+	if (clamped == this->mVolume) return;
+	this->mVolume = clamped;
+	// WE reads its volume once at load (the same stream setup --silent skips),
+	// so this is a reload like audioEnabled - which is why the QML side should
+	// commit a slider on release rather than per drag tick.
+	this->retireAndReload();
+	emit this->volumeChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setAudioProcessing(bool audioProcessing) {
+	if (audioProcessing == this->mAudioProcessing) return;
+	this->mAudioProcessing = audioProcessing;
+	this->retireAndReload();
+	emit this->audioProcessingChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setMouseDisabled(bool mouseDisabled) {
+	if (mouseDisabled == this->mMouseDisabled) return;
+	this->mMouseDisabled = mouseDisabled;
+	this->retireAndReload();
+	emit this->mouseDisabledChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setParallaxDisabled(bool parallaxDisabled) {
+	if (parallaxDisabled == this->mParallaxDisabled) return;
+	this->mParallaxDisabled = parallaxDisabled;
+	this->retireAndReload();
+	emit this->parallaxDisabledChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setParticlesDisabled(bool particlesDisabled) {
+	if (particlesDisabled == this->mParticlesDisabled) return;
+	this->mParticlesDisabled = particlesDisabled;
+	this->retireAndReload();
+	emit this->particlesDisabledChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setProperties(const QVariantMap& properties) {
+	if (properties == this->mProperties) return;
+	this->mProperties = properties;
+	// Applied over the project's defaults at load (WE's own --set-property
+	// path), so a change is a reload like every other load-time argument.
+	this->retireAndReload();
+	emit this->propertiesChanged();
 	this->update();
 }
 
