@@ -97,6 +97,17 @@ public:
 		this->mFocusY.store(focusY < 0.f ? 0.f : (focusY > 1.f ? 1.f : focusY));
 	}
 
+	// Ask for the full uncropped scene as a PNG at `path`, written on the next
+	// frame (the render thread owns the GL context and the scene FBO). onGrab
+	// is called ON THE WE THREAD when it is done, with the path; the surface
+	// hops it to the GUI thread. A no-op frame if there is no scene FBO.
+	void requestSceneGrab(std::string path, std::function<void(std::string)> onGrab) {
+		std::lock_guard<std::mutex> lock(this->mGrabMutex);
+		this->mGrabPath = std::move(path);
+		this->mOnGrab = std::move(onGrab);
+		this->mGrabPending.store(true);
+	}
+
 	// The shell has decided a fullscreen window covers the output this wallpaper
 	// is drawn on (thread-safe, live - deliberately NOT a thread rebuild the way
 	// scaleMode and audioEnabled are, because nothing about the load changes).
@@ -184,6 +195,14 @@ private:
 	// its content box by. 0 for a video or before the first scene frame.
 	std::atomic<int> mContentW {0};
 	std::atomic<int> mContentH {0};
+
+	// A one-shot full-scene grab for the crop picker. The path and callback
+	// are set under the mutex; the render loop reads the flag each frame and
+	// writes the PNG when a scene FBO is present.
+	std::atomic<bool> mGrabPending {false};
+	std::mutex mGrabMutex;
+	std::string mGrabPath;
+	std::function<void(std::string)> mOnGrab;
 
 	// Read by the render loop every iteration, written by the consumer through
 	// setOccluded. Safe on the detach path for the same reason mStop and mFps

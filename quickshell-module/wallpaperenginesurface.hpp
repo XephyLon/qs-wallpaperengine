@@ -236,6 +236,15 @@ public:
 	[[nodiscard]] int contentWidth() const { return this->mContentWidth; }
 	[[nodiscard]] int contentHeight() const { return this->mContentHeight; }
 
+	/// Ask the renderer for the full, uncropped scene as a PNG at `path` -
+	/// the real content aspect (e.g. 32:9), which the crop picker needs
+	/// because the preview image is not the scene. The WE thread writes it on
+	/// its next frame and emits sceneGrabReady(path). A no-op for a video
+	/// (there is no scene FBO) and while nothing is loaded. `path` should
+	/// carry a cache-busting suffix - Qt keys its pixmap cache on the URL and
+	/// a rewrite at the same path is not reloaded.
+	Q_INVOKABLE void requestSceneGrab(const QString& path);
+
 	[[nodiscard]] bool occluded() const { return this->mOccluded; }
 	void setOccluded(bool occluded);
 
@@ -258,6 +267,7 @@ signals:
 	void focusXChanged();
 	void focusYChanged();
 	void contentSizeChanged();
+	void sceneGrabReady(const QString& path);
 	void occludedChanged();
 	void renderedChanged();
 	void failedChanged();

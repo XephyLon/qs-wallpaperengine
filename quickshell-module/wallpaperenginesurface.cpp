@@ -693,6 +693,20 @@ void WallpaperEngineSurface::setProperties(const QVariantMap& properties) {
 	this->update();
 }
 
+void WallpaperEngineSurface::requestSceneGrab(const QString& path) {
+	if (!this->mThread || path.isEmpty()) return;
+	// The callback runs on the WE thread; hop the result to the GUI thread.
+	this->mThread->requestSceneGrab(path.toStdString(), [this](std::string p) {
+		QMetaObject::invokeMethod(
+		    this, [this, p] { emit this->sceneGrabReady(QString::fromStdString(p)); },
+		    Qt::QueuedConnection
+		);
+	});
+	// Nudge a frame in case the surface is idle (live=false or occluded): the
+	// grab is serviced from the render loop, which the producer keeps turning.
+	this->update();
+}
+
 void WallpaperEngineSurface::setFocusX(qreal focusX) {
 	const qreal clamped = std::clamp(focusX, 0.0, 1.0);
 	if (clamped == this->mFocusX) return;

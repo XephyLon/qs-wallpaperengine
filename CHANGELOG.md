@@ -30,6 +30,12 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
   video or before the first frame), so a crop picker can size its content box
   by the real aspect rather than the preview image's - a 32:9 wallpaper
   commonly ships a portrait preview.
+- **A full-scene grab for the crop picker.** `requestSceneGrab(path)` writes
+  the uncropped scene FBO to a PNG at its real authored aspect (e.g. 5120x1440
+  = 32:9) on the render thread's next frame, then emits `sceneGrabReady(path)`.
+  A crop picker needs this because the preview image is not the scene: a 32:9
+  ultrawide wallpaper commonly ships a portrait preview, so the picker cannot
+  represent the wallpaper from it. A no-op for a video (no scene FBO).
 
 ## [0.2.6] — 2026-08-08
 
