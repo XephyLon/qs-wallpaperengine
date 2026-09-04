@@ -36,6 +36,14 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
   A crop picker needs this because the preview image is not the scene: a 32:9
   ultrawide wallpaper commonly ships a portrait preview, so the picker cannot
   represent the wallpaper from it. A no-op for a video (no scene FBO).
+- **A `renderScale` quality dial on `WallpaperEngineSurface`.** `0.25..1`
+  (`1` = native): the wallpaper renders into a window that fraction of the
+  surface's pixel size and the scene graph upscales the smaller texture
+  (Linear-filtered, node stays item-sized). A load-time WE argument that
+  reloads on change, like the flag set. A scene renders into its own
+  authored-resolution FBO regardless, so this only trims a scene's final
+  composite (frame rate is the lever there); it is the video path, composited
+  at window size, where a lower value cuts real work.
 
 ## [0.2.6] — 2026-08-08
 
