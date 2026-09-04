@@ -644,8 +644,12 @@ void WeThread::run() {
 			glReadPixels(0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 			// GL's origin is bottom-left; QImage's is top-left. Construct from
 			// the buffer and mirror vertically before saving.
+			// No vertical mirror: WE's scene FBO is already top-origin (it is
+			// why the surface samples it without a flip - see updatePaintNode),
+			// so glReadPixels' rows land in QImage's top-to-bottom order as-is.
+			// A mirror here flips the grab upside down.
 			QImage image(pixels.data(), srcW, srcH, QImage::Format_RGBA8888);
-			if (!path.empty() && image.mirrored(false, true).save(QString::fromStdString(path), "PNG")) {
+			if (!path.empty() && image.save(QString::fromStdString(path), "PNG")) {
 				if (onGrab) onGrab(path);
 			}
 		}
