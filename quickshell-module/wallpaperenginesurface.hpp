@@ -10,6 +10,7 @@
 #include <qquickitem.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
+#include <qvariant.h>
 
 namespace qs::wallpaperengine {
 
@@ -99,6 +100,34 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// false. Audio existence is decided when WE loads the project, so toggling
 	/// this reloads the wallpaper (brief black-out, like a scaleMode change).
 	Q_PROPERTY(bool audioEnabled READ audioEnabled WRITE setAudioEnabled NOTIFY audioEnabledChanged);
+	/// Playback volume, 0..100 (percent; mapped to WE's own 0..128 scale, so
+	/// 100 is the old fixed "full internal volume, mix in the system mixer"
+	/// behaviour and stays the default). A load-time WE argument: changing it
+	/// reloads the wallpaper, so a UI slider should commit on release, not per
+	/// tick of a drag.
+	Q_PROPERTY(int volume READ volume WRITE setVolume NOTIFY volumeChanged);
+	/// Audio-reactive effects: whether WE records the desktop's audio for
+	/// wallpapers that visualize it. Default true (WE's own default).
+	/// Independent of audioEnabled - a muted wallpaper can still react.
+	/// Load-time; changing it reloads.
+	Q_PROPERTY(bool audioProcessing READ audioProcessing WRITE setAudioProcessing NOTIFY audioProcessingChanged);
+	/// Disable the wallpaper's mouse interaction (WE --disable-mouse).
+	/// Load-time; changing it reloads.
+	Q_PROPERTY(bool mouseDisabled READ mouseDisabled WRITE setMouseDisabled NOTIFY mouseDisabledChanged);
+	/// Disable the wallpaper's own parallax effect (WE --disable-parallax) -
+	/// WE's scene parallax, nothing to do with the shell's workspace parallax.
+	/// Load-time; changing it reloads.
+	Q_PROPERTY(bool parallaxDisabled READ parallaxDisabled WRITE setParallaxDisabled NOTIFY parallaxDisabledChanged);
+	/// Disable the wallpaper's particle systems (WE --disable-particles).
+	/// Load-time; changing it reloads.
+	Q_PROPERTY(bool particlesDisabled READ particlesDisabled WRITE setParticlesDisabled NOTIFY particlesDisabledChanged);
+	/// Per-wallpaper user properties (project.json general.properties), as a
+	/// map of property name -> value in --set-property's own string form
+	/// (booleans "1"/"0", colors "r g b", everything else verbatim). The map
+	/// is applied over the project's defaults at load, so changing it reloads;
+	/// keys are sorted before they reach WE so the same map always builds the
+	/// same argv.
+	Q_PROPERTY(QVariantMap properties READ properties WRITE setProperties NOTIFY propertiesChanged);
 	/// Set by the shell when a fullscreen window covers THIS output. Default
 	/// false. While it is set the wallpaper's renderer idles at a few frames a
 	/// second and publishes nothing, so the surface stops repainting and the
@@ -164,6 +193,24 @@ public:
 	[[nodiscard]] bool audioEnabled() const { return this->mAudioEnabled; }
 	void setAudioEnabled(bool audioEnabled);
 
+	[[nodiscard]] int volume() const { return this->mVolume; }
+	void setVolume(int volume);
+
+	[[nodiscard]] bool audioProcessing() const { return this->mAudioProcessing; }
+	void setAudioProcessing(bool audioProcessing);
+
+	[[nodiscard]] bool mouseDisabled() const { return this->mMouseDisabled; }
+	void setMouseDisabled(bool mouseDisabled);
+
+	[[nodiscard]] bool parallaxDisabled() const { return this->mParallaxDisabled; }
+	void setParallaxDisabled(bool parallaxDisabled);
+
+	[[nodiscard]] bool particlesDisabled() const { return this->mParticlesDisabled; }
+	void setParticlesDisabled(bool particlesDisabled);
+
+	[[nodiscard]] QVariantMap properties() const { return this->mProperties; }
+	void setProperties(const QVariantMap& properties);
+
 	[[nodiscard]] bool occluded() const { return this->mOccluded; }
 	void setOccluded(bool occluded);
 
@@ -177,6 +224,12 @@ signals:
 	void fpsChanged();
 	void scaleModeChanged();
 	void audioEnabledChanged();
+	void volumeChanged();
+	void audioProcessingChanged();
+	void mouseDisabledChanged();
+	void parallaxDisabledChanged();
+	void particlesDisabledChanged();
+	void propertiesChanged();
 	void occludedChanged();
 	void renderedChanged();
 	void failedChanged();
@@ -190,6 +243,24 @@ private:
 	int mFps = 60;
 	QString mScaleMode = QStringLiteral("fill");
 	bool mAudioEnabled = false;
+	int mVolume = 100;
+	bool mAudioProcessing = true;
+	bool mMouseDisabled = false;
+	bool mParallaxDisabled = false;
+	bool mParticlesDisabled = false;
+	QVariantMap mProperties;
+
+	// The reload dance every load-time WE argument shares (scaleMode was its
+	// first spelling): retire the running load's generation so verdicts the
+	// render thread has already posted about the pre-reload attempt cannot
+	// land on the reloaded one, clear the loaded path so updatePaintNode
+	// rebuilds the thread, and take back the two verdicts QML holds - a
+	// reload drops the node, so "rendered" would otherwise tell QML to start
+	// a transition against the black surface the reload just created. The
+	// caller emits its OWN change signal after this returns, matching the
+	// original ordering: the generation is retired before any QML handler
+	// can observe the new value.
+	void retireAndReload();
 	bool mOccluded = false;      // a fullscreen window covers this output (GUI thread)
 	bool mRendered = false;      // first frame of the current load seen (GUI thread)
 	bool mFailed = false;        // current load cannot render (GUI thread)

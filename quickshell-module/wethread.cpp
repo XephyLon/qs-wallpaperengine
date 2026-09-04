@@ -9,6 +9,7 @@
 #include <csignal>
 #include <pthread.h>
 
+#include <algorithm>
 #include <chrono>
 #include <clocale>
 #include <cstdio>
@@ -153,6 +154,12 @@ WeThread::WeThread(
     int fps,
     std::string scaleMode,
     bool audioEnabled,
+    int volume,
+    bool audioProcessing,
+    bool mouseDisabled,
+    bool parallaxDisabled,
+    bool particlesDisabled,
+    std::vector<std::string> setProperties,
     std::function<void()> onFrame
 )
     : mDisplay(display)
@@ -163,6 +170,12 @@ WeThread::WeThread(
     , mWidth(width)
     , mHeight(height)
     , mAudioEnabled(audioEnabled)
+    , mVolumeArg(std::to_string(std::clamp(volume, 0, 128)))
+    , mAudioProcessing(audioProcessing)
+    , mMouseDisabled(mouseDisabled)
+    , mParallaxDisabled(parallaxDisabled)
+    , mParticlesDisabled(particlesDisabled)
+    , mSetProperties(std::move(setProperties))
     , mOnFrame(std::move(onFrame))
     , mFps(fps > 0 ? fps : 60) {
 	this->mThread = std::thread([this] { this->run(); });
@@ -418,14 +431,40 @@ void WeThread::run() {
 	// suppresses output, not the detector.
 	argv.push_back(const_cast<char*>("--noautomute"));
 
-	// When audio IS on, run at full internal volume (default is 15/128) so the
-	// per-stream system mixer is the one volume knob. --volume and --silent are
-	// mutually exclusive to WE's parser; only one branch adds either flag.
+	// When audio IS on, run at the volume the surface asked for (WE's own
+	// 0..128 scale; the QML property is 0..100 and the surface maps it). The
+	// old fixed 128 - "full internal volume so the per-stream system mixer is
+	// the one knob" - survives as the DEFAULT the surface maps 100 to; a
+	// per-wallpaper volume exists because one wallpaper's soundtrack being
+	// mastered louder than another's is a property of the wallpaper, which the
+	// per-stream mixer (one knob per app, and every wallpaper is the same app)
+	// cannot express. --volume and --silent are mutually exclusive to WE's
+	// parser; only one branch adds either flag.
 	if (this->mAudioEnabled) {
 		argv.push_back(const_cast<char*>("--volume"));
-		argv.push_back(const_cast<char*>("128"));
+		argv.push_back(const_cast<char*>(this->mVolumeArg.c_str()));
 	} else {
 		argv.push_back(const_cast<char*>("--silent"));
+	}
+	// Audio-reactive effects sample the DESKTOP's audio through a recorder -
+	// a wallpaper visualizing what is playing - which is independent of
+	// whether the wallpaper's own soundtrack plays, so this sits outside the
+	// volume/silent branch: a muted wallpaper can still react, and switching
+	// the recorder off is a saving whether or not playback is on.
+	if (!this->mAudioProcessing) {
+		argv.push_back(const_cast<char*>("--no-audio-processing"));
+	}
+	// The three engine feature switches, load-time like everything else here.
+	if (this->mMouseDisabled) argv.push_back(const_cast<char*>("--disable-mouse"));
+	if (this->mParallaxDisabled) argv.push_back(const_cast<char*>("--disable-parallax"));
+	if (this->mParticlesDisabled) argv.push_back(const_cast<char*>("--disable-particles"));
+	// Per-wallpaper user properties from project.json's general.properties,
+	// already serialized to WE's own "name=value" form. The strings live in
+	// mSetProperties for the thread's whole life, so the pointers argv hands
+	// WE stay valid exactly the way mScaleMode's does.
+	for (const auto& property: this->mSetProperties) {
+		argv.push_back(const_cast<char*>("--set-property"));
+		argv.push_back(const_cast<char*>(property.c_str()));
 	}
 	// Pass the scaling mode: WE applies it for video wallpapers (which composite
 	// into the driver output, not a scene FBO). Scenes render into their own

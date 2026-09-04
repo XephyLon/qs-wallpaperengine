@@ -5,6 +5,22 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+### Added
+- **The rest of the engine's flag set on `WallpaperEngineSurface`.** Six new
+  properties, all load-time WE arguments that reload the wallpaper on change,
+  exactly like `scaleMode`/`audioEnabled`: `volume` (0..100, mapped onto WE's
+  0..128 scale; 100 is the old fixed "full internal volume" so nothing changes
+  for existing consumers), `audioProcessing` (WE's audio-reactive recorder -
+  independent of `audioEnabled`, so a muted wallpaper can still react, and
+  placed outside the `--volume`/`--silent` branch for that reason),
+  `mouseDisabled`, `parallaxDisabled`, `particlesDisabled` (WE's
+  `--disable-mouse`/`--disable-parallax`/`--disable-particles`), and
+  `properties` - a map of project.json `general.properties` overrides in
+  `--set-property`'s own `name=value` string form, sorted by key so the same
+  map always builds the same argv. The reload dance the setters share
+  (generation retire, loaded-path clear, verdict take-back) is one
+  `retireAndReload()` now instead of a third and fourth hand copy.
+
 ## [0.2.6] — 2026-08-08
 
 ### Fixed

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 // Runs a linux-wallpaperengine wallpaper on its OWN thread with its OWN EGL
 // context (sharing GL objects with Qt's, so the output texture is usable by Qt).
@@ -32,6 +33,12 @@ public:
 	// missed frames from a poll clock that drifts against this one. It must be
 	// cheap and thread-safe (it runs inside the render loop); the surface's one
 	// posts a queued call and returns.
+	// volume is in WE's own units (0..128, its --volume argument); the surface
+	// maps its 0..100 QML property before constructing this. audioProcessing,
+	// the three disable flags and setProperties are all load-time WE arguments
+	// exactly like scaleMode/audioEnabled: the surface rebuilds this thread to
+	// change any of them. setProperties entries are already in --set-property's
+	// own "name=value" form; this class does not interpret them.
 	WeThread(
 	    void* display,
 	    void* sharedContext,
@@ -42,6 +49,12 @@ public:
 	    int fps,
 	    std::string scaleMode,
 	    bool audioEnabled,
+	    int volume,
+	    bool audioProcessing,
+	    bool mouseDisabled,
+	    bool parallaxDisabled,
+	    bool particlesDisabled,
+	    std::vector<std::string> setProperties,
 	    std::function<void()> onFrame = {}
 	);
 	~WeThread();
@@ -124,6 +137,16 @@ private:
 	int mWidth;
 	int mHeight;
 	bool mAudioEnabled;
+	// Load-time arguments, read only by run()'s argv construction. mVolumeArg
+	// is kept as the string argv needs, so its c_str() stays valid for WE's
+	// whole run the way mScaleMode's does; mSetProperties likewise owns every
+	// "name=value" string WE holds a pointer into.
+	std::string mVolumeArg;
+	bool mAudioProcessing;
+	bool mMouseDisabled;
+	bool mParallaxDisabled;
+	bool mParticlesDisabled;
+	std::vector<std::string> mSetProperties;
 	std::function<void()> mOnFrame;
 
 	std::thread mThread;
