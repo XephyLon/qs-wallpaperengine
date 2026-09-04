@@ -84,6 +84,19 @@ public:
 	// Live-adjust the producer frame rate (thread-safe).
 	void setFps(int fps) { this->mFps.store(fps > 0 ? fps : 60); }
 
+	// Live-adjust WHERE the "fill"/cover crop sits when the wallpaper's scene
+	// FBO overflows the output on an axis. 0..1 per axis, 0.5 = centre (the
+	// old fixed behaviour). Read every frame in the scene-FBO blit, so a drag
+	// pans the wallpaper with no reload - unlike scaleMode, which is a WE
+	// startup argument. It only bites the SCENE path: a video is composited by
+	// WE per --scaling and blitted straight across, and WE has no crop-offset
+	// of its own, so a video stays centre-cropped. Thread-safe, live, and
+	// deliberately not a rebuild for the same reason setOccluded is not.
+	void setFocus(float focusX, float focusY) {
+		this->mFocusX.store(focusX < 0.f ? 0.f : (focusX > 1.f ? 1.f : focusX));
+		this->mFocusY.store(focusY < 0.f ? 0.f : (focusY > 1.f ? 1.f : focusY));
+	}
+
 	// The shell has decided a fullscreen window covers the output this wallpaper
 	// is drawn on (thread-safe, live - deliberately NOT a thread rebuild the way
 	// scaleMode and audioEnabled are, because nothing about the load changes).
@@ -123,6 +136,14 @@ public:
 	[[nodiscard]] int width() const { return this->mWidth; }
 	[[nodiscard]] int height() const { return this->mHeight; }
 
+	// The wallpaper's own content size - the scene FBO's dimensions, which is
+	// the authored resolution and so the same on every output. 0 until the
+	// first scene frame, and stays 0 for a video (WE composites a video into
+	// the driver output at screen size, so there is no distinct content
+	// aspect to pan). Set on the render thread in the blit, read from Qt's.
+	[[nodiscard]] int contentWidth() const { return this->mContentW.load(); }
+	[[nodiscard]] int contentHeight() const { return this->mContentH.load(); }
+
 private:
 	void run(); // thread body
 	void notify() {
@@ -153,6 +174,16 @@ private:
 	std::atomic<bool> mStop {false};
 	std::atomic<int> mFps {60};
 	std::atomic<bool> mFailed {false};
+
+	// The "fill" crop's position, read every frame in the blit. Same
+	// detach-safety as mFps/mOccluded: a leaked WeThread outlives its readers.
+	std::atomic<float> mFocusX {0.5f};
+	std::atomic<float> mFocusY {0.5f};
+
+	// The scene FBO size, published from the blit for the crop picker to size
+	// its content box by. 0 for a video or before the first scene frame.
+	std::atomic<int> mContentW {0};
+	std::atomic<int> mContentH {0};
 
 	// Read by the render loop every iteration, written by the consumer through
 	// setOccluded. Safe on the detach path for the same reason mStop and mFps
