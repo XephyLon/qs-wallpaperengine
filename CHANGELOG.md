@@ -5,6 +5,8 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-04
+
 ### Added
 - **The rest of the engine's flag set on `WallpaperEngineSurface`.** Six new
   properties, all load-time WE arguments that reload the wallpaper on change,
