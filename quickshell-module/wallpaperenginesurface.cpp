@@ -404,6 +404,12 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		// is safe for exactly the reason reading mFps and mAudioEnabled above is:
 		// the GUI thread is blocked for the scene-graph sync.
 		this->mThread->setOccluded(this->mOccluded);
+		// A fresh thread starts centre-cropped; hand it the stored focus on
+		// the load path so a wallpaper that comes up with a non-centre crop
+		// (a per-project focus restored from the store) starts where it was
+		// left rather than snapping from centre on the first frame. Same
+		// reason and same safety as setOccluded just above.
+		this->mThread->setFocus(static_cast<float>(this->mFocusX), static_cast<float>(this->mFocusY));
 	}
 
 	// Which load the two verdicts below are talking about. They are posted from
@@ -490,6 +496,28 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 		    },
 		    Qt::QueuedConnection
 		);
+	}
+
+	// Mirror the wallpaper's content size out to the QML property. The WE
+	// thread publishes it from the blit; comparing here and posting the
+	// change turns a per-frame atomic into a single property notification the
+	// crop picker can bind to. Guarded on a real change so it fires once when
+	// the scene's size settles, not every frame.
+	{
+		const int cw = this->mThread->contentWidth();
+		const int ch = this->mThread->contentHeight();
+		if (cw != this->mContentWidth || ch != this->mContentHeight) {
+			QMetaObject::invokeMethod(
+			    this,
+			    [this, cw, ch] {
+				    if (cw == this->mContentWidth && ch == this->mContentHeight) return;
+				    this->mContentWidth = cw;
+				    this->mContentHeight = ch;
+				    emit this->contentSizeChanged();
+			    },
+			    Qt::QueuedConnection
+			);
+		}
 	}
 
 	if (!node) {
@@ -663,6 +691,30 @@ void WallpaperEngineSurface::setProperties(const QVariantMap& properties) {
 	this->retireAndReload();
 	emit this->propertiesChanged();
 	this->update();
+}
+
+void WallpaperEngineSurface::setFocusX(qreal focusX) {
+	const qreal clamped = std::clamp(focusX, 0.0, 1.0);
+	if (clamped == this->mFocusX) return;
+	this->mFocusX = clamped;
+	// LIVE, not a reload: the blit reads the focus every frame, so this pushes
+	// straight to the running thread and pans the wallpaper in place - the
+	// whole point of doing the fill crop ourselves rather than in WE. mThread
+	// is null until the first updatePaintNode, which re-applies both axes on
+	// the load path (like setOccluded), so a wallpaper that comes up with a
+	// non-centre focus already stored starts there.
+	if (this->mThread)
+		this->mThread->setFocus(static_cast<float>(this->mFocusX), static_cast<float>(this->mFocusY));
+	emit this->focusXChanged();
+}
+
+void WallpaperEngineSurface::setFocusY(qreal focusY) {
+	const qreal clamped = std::clamp(focusY, 0.0, 1.0);
+	if (clamped == this->mFocusY) return;
+	this->mFocusY = clamped;
+	if (this->mThread)
+		this->mThread->setFocus(static_cast<float>(this->mFocusX), static_cast<float>(this->mFocusY));
+	emit this->focusYChanged();
 }
 
 void WallpaperEngineSurface::setOccluded(bool occluded) {

@@ -20,6 +20,16 @@ pre-1.0: `0.x` may change without notice). The current version is in `VERSION`.
   map always builds the same argv. The reload dance the setters share
   (generation retire, loaded-path clear, verdict take-back) is one
   `retireAndReload()` now instead of a third and fourth hand copy.
+- **A live crop focus for the "fill" scale mode, and the content size to
+  drive it.** `focusX`/`focusY` (0..1, 0.5 = centre) move where the cover-crop
+  sits when a scene overflows the output on an axis - LIVE, pushed straight to
+  the render thread and read every frame in the scene-FBO blit, so a UI can pan
+  the wallpaper with no reload. It reaches only the scene path (a video is
+  composited by WE, which has no crop offset, so it stays centre-cropped).
+  `contentWidth`/`contentHeight` publish the scene's authored size (0 for a
+  video or before the first frame), so a crop picker can size its content box
+  by the real aspect rather than the preview image's - a 32:9 wallpaper
+  commonly ships a portrait preview.
 
 ## [0.2.6] — 2026-08-08
 

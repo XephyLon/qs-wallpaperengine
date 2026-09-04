@@ -616,6 +616,12 @@ void WeThread::run() {
 		// scene/video FBO per the mode.
 		const bool sceneValid = srcFb != 0 && srcW >= 8 && srcH >= 8;
 
+		// Publish the content size for the crop picker: the scene FBO's own
+		// dimensions when there is one, 0 for a video (WE composited it at
+		// screen size, so there is no distinct content aspect to pan).
+		this->mContentW.store(sceneValid ? srcW : 0);
+		this->mContentH.store(sceneValid ? srcH : 0);
+
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
 		if (!sceneValid) {
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, driver->fbo());
@@ -642,14 +648,23 @@ void WeThread::run() {
 					dx0 = (this->mWidth - w) / 2;
 					dx1 = dx0 + w;
 				}
-			} else { // "fill"/"default": cover, crop the source center
+			} else { // "fill"/"default": cover, crop to the focus point
+				// The crop window is the largest sub-rect of the source with
+				// the output's aspect; where it sits along the overflowing
+				// axis is the focus fraction (0.5 = centre, the old fixed
+				// behaviour). Read live, so a drag pans without a reload.
+				const float focusX = this->mFocusX.load();
+				const float focusY = this->mFocusY.load();
 				if (srcA > dstA) {
 					const int w = static_cast<int>(srcH * dstA);
-					sx0 = (srcW - w) / 2;
+					sx0 = static_cast<int>((srcW - w) * focusX);
 					sx1 = sx0 + w;
 				} else {
 					const int h = static_cast<int>(srcW / dstA);
-					sy0 = (srcH - h) / 2;
+					// GL's framebuffer origin is bottom-left, so a focus of 0
+					// (the TOP of the picture, in the shell's top-left frame)
+					// is the HIGH y here - invert so dragging up shows the top.
+					sy0 = static_cast<int>((srcH - h) * (1.0f - focusY));
 					sy1 = sy0 + h;
 				}
 			}

@@ -128,6 +128,22 @@ class WallpaperEngineSurface: public QQuickItem {
 	/// keys are sorted before they reach WE so the same map always builds the
 	/// same argv.
 	Q_PROPERTY(QVariantMap properties READ properties WRITE setProperties NOTIFY propertiesChanged);
+	/// Where the "fill" scaleMode's cover-crop sits, 0..1 per axis (0.5 =
+	/// centre, the default). Only meaningful when the wallpaper overflows the
+	/// output on an axis under "fill". Unlike scaleMode this is LIVE - it pans
+	/// the wallpaper with no reload - and it reaches only the SCENE path: a
+	/// video is composited by WE, which has no crop offset, so a video stays
+	/// centre-cropped.
+	Q_PROPERTY(qreal focusX READ focusX WRITE setFocusX NOTIFY focusXChanged);
+	Q_PROPERTY(qreal focusY READ focusY WRITE setFocusY NOTIFY focusYChanged);
+	/// The wallpaper's own content size - the scene's authored resolution, the
+	/// same on every output. 0 until the first scene frame, and 0 for a video
+	/// (WE composites a video at screen size, so it has no content aspect to
+	/// pan). The crop picker sizes its content box by this so its overflow
+	/// axis matches what the renderer actually crops - the preview image's
+	/// aspect is not the scene's.
+	Q_PROPERTY(int contentWidth READ contentWidth NOTIFY contentSizeChanged);
+	Q_PROPERTY(int contentHeight READ contentHeight NOTIFY contentSizeChanged);
 	/// Set by the shell when a fullscreen window covers THIS output. Default
 	/// false. While it is set the wallpaper's renderer idles at a few frames a
 	/// second and publishes nothing, so the surface stops repainting and the
@@ -211,6 +227,15 @@ public:
 	[[nodiscard]] QVariantMap properties() const { return this->mProperties; }
 	void setProperties(const QVariantMap& properties);
 
+	[[nodiscard]] qreal focusX() const { return this->mFocusX; }
+	void setFocusX(qreal focusX);
+
+	[[nodiscard]] qreal focusY() const { return this->mFocusY; }
+	void setFocusY(qreal focusY);
+
+	[[nodiscard]] int contentWidth() const { return this->mContentWidth; }
+	[[nodiscard]] int contentHeight() const { return this->mContentHeight; }
+
 	[[nodiscard]] bool occluded() const { return this->mOccluded; }
 	void setOccluded(bool occluded);
 
@@ -230,6 +255,9 @@ signals:
 	void parallaxDisabledChanged();
 	void particlesDisabledChanged();
 	void propertiesChanged();
+	void focusXChanged();
+	void focusYChanged();
+	void contentSizeChanged();
 	void occludedChanged();
 	void renderedChanged();
 	void failedChanged();
@@ -249,6 +277,13 @@ private:
 	bool mParallaxDisabled = false;
 	bool mParticlesDisabled = false;
 	QVariantMap mProperties;
+	// Live, not a reload input: pushed straight to the running WE thread.
+	qreal mFocusX = 0.5;
+	qreal mFocusY = 0.5;
+	// Mirrored from the WE thread's atomics on each pass, so a change is a
+	// property notification rather than a poll on the QML side.
+	int mContentWidth = 0;
+	int mContentHeight = 0;
 
 	// The reload dance every load-time WE argument shares (scaleMode was its
 	// first spelling): retire the running load's generation so verdicts the
