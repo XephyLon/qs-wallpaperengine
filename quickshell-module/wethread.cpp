@@ -638,12 +638,14 @@ void WeThread::run() {
 				path = this->mGrabPath;
 				onGrab = this->mOnGrab;
 			}
+			// A full read of the scene FBO (5120x1440x4 ~ 29 MB for a 32:9
+			// scene) plus a PNG encode, on the render thread. A one-shot stall
+			// of a few hundred ms - fine for a picker firing it once; do NOT
+			// wire this to a hover or a per-frame path.
 			std::vector<unsigned char> pixels(static_cast<std::size_t>(srcW) * srcH * 4);
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
 			glPixelStorei(GL_PACK_ALIGNMENT, 1);
 			glReadPixels(0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-			// GL's origin is bottom-left; QImage's is top-left. Construct from
-			// the buffer and mirror vertically before saving.
 			// No vertical mirror: WE's scene FBO is already top-origin (it is
 			// why the surface samples it without a flip - see updatePaintNode),
 			// so glReadPixels' rows land in QImage's top-to-bottom order as-is.
@@ -693,10 +695,12 @@ void WeThread::run() {
 					sx1 = sx0 + w;
 				} else {
 					const int h = static_cast<int>(srcW / dstA);
-					// GL's framebuffer origin is bottom-left, so a focus of 0
-					// (the TOP of the picture, in the shell's top-left frame)
-					// is the HIGH y here - invert so dragging up shows the top.
-					sy0 = static_cast<int>((srcH - h) * (1.0f - focusY));
+					// The scene FBO is rendered V-flipped (the driver's
+					// renderVFlip() = true), so row 0 IS the top of the picture -
+					// the same premise updatePaintNode samples on and the scene
+					// grab relies on. So focusY 0 (the shell's top, top-left
+					// frame) selects the top strip at sy0 = 0; no inversion.
+					sy0 = static_cast<int>((srcH - h) * focusY);
 					sy1 = sy0 + h;
 				}
 			}
