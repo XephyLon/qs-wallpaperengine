@@ -387,8 +387,13 @@ QSGNode* WallpaperEngineSurface::updatePaintNode(QSGNode* oldNode, UpdatePaintNo
 			    it.key().toStdString() + "=" + it.value().toString().toStdString()
 			);
 		}
+		// Render into a window scaled by renderScale; the node stays
+		// item-sized so the scene graph upscales the smaller texture. Floored
+		// at 16px so a tiny surface never asks WE for a 0-sized window.
+		const int rw = std::max(16, static_cast<int>(w * this->mRenderScale));
+		const int rh = std::max(16, static_cast<int>(h * this->mRenderScale));
 		this->mThread = std::make_unique<WeThread>(
-		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), w, h,
+		    dpy, eglCtx->nativeContext(), this->mProjectPath.toStdString(), assetsDir(), rw, rh,
 		    this->mFps, this->mScaleMode.toStdString(), this->mAudioEnabled,
 		    // 0..100 -> WE's 0..128; rounding at the boundary so 100 is exactly
 		    // the old fixed 128.
@@ -690,6 +695,16 @@ void WallpaperEngineSurface::setProperties(const QVariantMap& properties) {
 	// path), so a change is a reload like every other load-time argument.
 	this->retireAndReload();
 	emit this->propertiesChanged();
+	this->update();
+}
+
+void WallpaperEngineSurface::setRenderScale(qreal renderScale) {
+	const qreal clamped = std::clamp(renderScale, 0.25, 1.0);
+	if (qFuzzyCompare(clamped, this->mRenderScale)) return;
+	this->mRenderScale = clamped;
+	// The render window is fixed when WE starts, so a change is a reload.
+	this->retireAndReload();
+	emit this->renderScaleChanged();
 	this->update();
 }
 
