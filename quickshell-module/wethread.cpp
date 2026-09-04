@@ -20,6 +20,9 @@
 
 #include <glm/vec2.hpp>
 
+#include <qimage.h>
+#include <qstring.h>
+
 #include <WallpaperEngine/Application/ApplicationContext.h>
 #include <WallpaperEngine/Application/WallpaperApplication.h>
 #include <WallpaperEngine/Render/Drivers/CFboOpenGLDriver.h>
@@ -621,6 +624,31 @@ void WeThread::run() {
 		// screen size, so there is no distinct content aspect to pan).
 		this->mContentW.store(sceneValid ? srcW : 0);
 		this->mContentH.store(sceneValid ? srcH : 0);
+
+		// A pending full-scene grab: read the uncropped scene FBO and write a
+		// PNG at the real content aspect. One-shot, on the render thread that
+		// owns the context. Only for a scene - a video has no scene FBO to
+		// grab the full frame from.
+		if (this->mGrabPending.load() && sceneValid) {
+			this->mGrabPending.store(false);
+			std::string path;
+			std::function<void(std::string)> onGrab;
+			{
+				std::lock_guard<std::mutex> lock(this->mGrabMutex);
+				path = this->mGrabPath;
+				onGrab = this->mOnGrab;
+			}
+			std::vector<unsigned char> pixels(static_cast<std::size_t>(srcW) * srcH * 4);
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, srcFb);
+			glPixelStorei(GL_PACK_ALIGNMENT, 1);
+			glReadPixels(0, 0, srcW, srcH, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+			// GL's origin is bottom-left; QImage's is top-left. Construct from
+			// the buffer and mirror vertically before saving.
+			QImage image(pixels.data(), srcW, srcH, QImage::Format_RGBA8888);
+			if (!path.empty() && image.mirrored(false, true).save(QString::fromStdString(path), "PNG")) {
+				if (onGrab) onGrab(path);
+			}
+		}
 
 		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, tgt.fbo);
 		if (!sceneValid) {
